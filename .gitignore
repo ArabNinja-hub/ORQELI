@@ -6,3 +6,7 @@ dist/
 *.log
 *.tsbuildinfo
 .DS_Store
+
+# Browser test output
+test-results/
+playwright-report/

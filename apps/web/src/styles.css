@@ -363,3 +363,34 @@ p { line-height: 1.75; }
 
 .nav>.owner-link { display: none; }
 @media(max-width:640px){.nav.open>.owner-link { display: inline-flex; }}
+
+/* Public discovery uses the existing brand foundations, not a second theme. */
+.marketplace { padding: 48px 0 72px; min-height: calc(100vh - 205px); }
+.marketplace h1 { font-size: clamp(32px,4vw,46px); margin-top: 12px; overflow-wrap: anywhere; }
+.discovery-filters { display: flex; align-items: flex-end; gap: 16px; padding: 24px; border: 1px solid var(--border); background: var(--surface-tint); border-radius: var(--radius); }
+.discovery-filters .search-field { flex: 1; }.discovery-filters .form-field { min-width: 130px; }
+.filter-check { display: flex; align-items: center; gap: 8px; min-height: 46px; font-size: 13px; cursor: pointer; }
+.filter-check input { width: 18px; height: 18px; accent-color: var(--teal-dark); }
+.marketplace-note { display: flex; align-items: flex-start; gap: 8px; margin: 20px 0 32px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.marketplace-note svg { color: var(--teal-dark); }.results-summary { font-size: 14px; color: var(--muted); margin-bottom: 20px; }
+.business-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 24px; }
+.public-business-card { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; overflow-wrap: anywhere; }
+.public-business-card .eyebrow { display: flex; align-items: center; gap: 6px; }
+.public-business-card h2 { font-size: 23px; margin: 16px 0 12px; }.public-business-card h2 a:hover { color: var(--teal-dark); }
+.business-address,.business-excerpt { color: var(--muted); font-size: 14px; }.business-excerpt { margin-top: 12px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.service-count { font-size: 12px; color: var(--muted); margin: 24px 0 16px; }.public-business-card .text-link { margin-top: auto; }
+.results-pagination { display: flex; gap: 16px; margin-top: 32px; flex-wrap: wrap; }
+.discovery-owner-link { border-top: 1px solid var(--border); padding-top: 24px; margin-top: 48px; color: var(--muted); font-size: 14px; }
+.loading-state { padding: 48px 0; color: var(--muted); }.discovery-empty .secondary-button { margin-top: 20px; }
+.profile-back { margin-bottom: 32px; }.profile-heading { border-bottom: 1px solid var(--border); padding-bottom: 32px; }
+.profile-heading>p { display: flex; align-items: flex-start; gap: 8px; margin: 20px 0; color: var(--muted); }
+.approval-label { display: inline-flex; align-items: center; gap: 8px; color: var(--teal-dark); font-size: 13px; font-weight: 600; }
+.profile-columns { display: grid; grid-template-columns: minmax(0,2fr) minmax(0,1fr); gap: 64px; padding-top: 40px; }
+.profile-section { margin-bottom: 32px; overflow-wrap: anywhere; }.profile-section h2,.booking-notice h2 { font-size: 24px; margin-bottom: 16px; }
+.profile-section p,.booking-notice p { color: var(--muted); font-size: 15px; white-space: pre-line; }
+.public-service-list { list-style: none; padding: 0; margin: 0; }.public-service-list li { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; padding: 24px 0; border-bottom: 1px solid var(--border); }
+.public-service-list h3 { font-size: 18px; margin-bottom: 8px; }.public-service-list p { font-size: 14px; }
+.service-price { font-size: 14px; font-weight: 700; text-align: right; min-width: 100px; }.service-duration { display: block; font-size: 13px; color: var(--muted); margin-top: 12px; }
+.booking-notice { background: var(--surface-tint); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }.booking-notice>svg { color: var(--teal-dark); margin-bottom: 16px; }.booking-notice h2 { font-size: 20px; }
+@media(max-width:980px) { .discovery-filters { flex-wrap: wrap; }.discovery-filters .search-field { flex-basis: 60%; }.business-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.profile-columns { gap: 32px; } }
+@media(max-width:640px) { .marketplace { padding-top: 24px; }.discovery-filters { padding: 20px; flex-direction: column; align-items: stretch; }.business-grid,.profile-columns { grid-template-columns: 1fr; }.profile-columns { gap: 8px; }.public-business-card { padding: 20px; }.public-service-list li { gap: 16px; flex-wrap: wrap; }.service-price { text-align: left; }.discovery-owner-link .text-link { margin-top: 8px; } }

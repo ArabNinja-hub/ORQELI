@@ -1,5 +1,7 @@
 # ORQELI interface audit and redesign
 
+> Historical design audit: the subsequent [public discovery slice](public-discovery.md) now implements approved-business discovery and public profiles. The visual system below is preserved. Booking remains unimplemented; see the newer document for current scope and verification limits.
+
 ## Scope
 
 Reviewed the homepage, navigation, authentication forms, owner onboarding/workspace and admin UI; ran the complete repository test/typecheck/build commands. No backend, database schema or authentication contracts changed. This is a visual and customer-navigation improvement, not certification that the marketplace is ready to launch.

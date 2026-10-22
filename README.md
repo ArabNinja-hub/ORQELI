@@ -135,3 +135,15 @@ That message is the UI fallback for a non-JSON response. In development the usua
 | `SESSION_COOKIE_SAMESITE` | no | Cookie SameSite policy (`lax`, `strict`, `none`); defaults to `lax`. A cross-site deployment (web and API on different origins) needs `none`, which is only accepted when `NODE_ENV=production` so the `Secure` flag is guaranteed. |
 | `TRUST_PROXY` | no | Trust reverse proxy `X-Forwarded-Proto` header (`true`/`false`); defaults to `false` (enabled automatically in `production`) |
 | `NODE_ENV` | no | `development`, `test`, or `production`; defaults to `development`. `production` sets `Secure` session cookies (the site must be served over HTTPS, terminating TLS at a trusted proxy), refuses `MemoryStore`, rejects the example `SESSION_SECRET` placeholder, and enables `trust proxy`. |
+
+## Public business discovery
+
+The city-aware marketplace now reads approved businesses from the existing database:
+
+- `GET /api/businesses?city=Kitwe` — public, paginated discovery with optional `q`, `hasServices`, and `page` filters.
+- `GET /api/businesses/:businessId?city=Kitwe` — approved public profile with stored active services and prices where available.
+- Web routes: `/discover?city=Kitwe` and `/businesses/:businessId?city=Kitwe` (also supports Ndola).
+
+Only approved businesses with active owners are returned; private owner/customer records are never part of public responses. **Online booking is not implemented.** No migrations or new application environment variables are needed for this read-only slice.
+
+See [Public discovery](docs/public-discovery.md) for validation rules, data visibility, setup, test commands and remaining booking/database-verification work.

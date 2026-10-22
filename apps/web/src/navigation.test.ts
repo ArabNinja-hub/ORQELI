@@ -14,20 +14,20 @@ function renderRoute(route: string): string {
 test('homepage preserves official branding and separates discovery from owner registration', () => {
   const html = renderRoute('/');
   assert.match(html, /orqeli-brand\.png/);
-  assert.match(html, /href="\/discover"/);
+  assert.match(html, /href="\/discover\?city=Kitwe"/);
   assert.match(html, /href="\/register\?role=BUSINESS_OWNER"/);
-  assert.match(html, /Business discovery and online booking are in development/);
+  assert.match(html, /Online booking is coming soon/);
   assert.doesNotMatch(html, /Book instantly/);
   assert.equal((html.match(/>Sign in<\/a>/g) ?? []).length, 1);
 });
 
-test('discovery retains supported cities and clearly communicates unavailable listings', () => {
+test('discovery retains supported cities and begins in an honest loading state', () => {
   for (const city of ['Kitwe', 'Ndola']) {
     const html = renderRoute(`/discover?city=${city}`);
     assert.match(html, new RegExp(`Explore ${city}`));
-    assert.match(html, /Public business listings are not available yet/);
+    assert.match(html, /Loading businesses in/);
   }
-  assert.match(renderRoute('/discover?city=Unknown'), /Explore Kitwe/);
+  assert.match(renderRoute('/discover?city=Unknown'), /Choose a supported city/);
 });
 
 test('initial render defers motion and provides accessible navigation landmarks', () => {

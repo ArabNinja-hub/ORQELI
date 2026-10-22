@@ -1,3 +1,4 @@
+import { DiscoverPage, BusinessProfilePage } from './DiscoveryPages';
 import React, { useEffect, useState } from 'react';
 import {
   Link,
@@ -55,6 +56,13 @@ function ShellContent() {
   const { status, user, logout } = useAuth();
   const navigate = useNavigate();
 
+  const location = useLocation();
+  const [lastCity, setLastCity] = useState('Kitwe');
+  const queryCity = new URLSearchParams(location.search).get('city');
+  const selectedCity = queryCity === 'Ndola' || queryCity === 'Kitwe' ? queryCity : lastCity;
+  useEffect(() => {
+    if (queryCity === 'Kitwe' || queryCity === 'Ndola') setLastCity(queryCity);
+  }, [queryCity]);
   const closeMenu = () => setMenuOpen(false);
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenuOpen(false); };
@@ -77,14 +85,14 @@ function ShellContent() {
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
       <header className="topbar">
-        <Link to="/" className="brand" onClick={closeMenu}>
+        <Link to={`/?city=${selectedCity}`} className="brand" onClick={closeMenu}>
           <img className="brand-logo" src="/assets/orqeli-brand.png" alt="ORQELI home" width="920" height="202" />
         </Link>
 
         <nav id="main-navigation" aria-label="Main navigation" className={menuOpen ? 'nav open' : 'nav'}>
           <Link className="owner-link" to="/register?role=BUSINESS_OWNER" onClick={closeMenu}>List your business <ArrowRight size={14} /></Link>
-          <Link to="/discover" onClick={closeMenu}>Explore businesses</Link>
-          <a href="/#how" onClick={closeMenu}>
+          <Link to={`/discover?city=${selectedCity}`} onClick={closeMenu}>Explore businesses</Link>
+          <a href={`/?city=${selectedCity}#how`} onClick={closeMenu}>
             How it works
           </a>
           <Link to="/business" onClick={closeMenu}>
@@ -159,6 +167,7 @@ function ShellContent() {
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="/discover" element={<DiscoverPage />} />
+          <Route path="/businesses/:businessId" element={<BusinessProfilePage />} />
           <Route path="/business" element={<BusinessWorkspacePage />} />
           <Route path="/admin" element={<AdminWorkspacePage />} />
           <Route
@@ -177,12 +186,12 @@ function ShellContent() {
       </main>
 
       <footer className="footer">
-        <Link to="/" className="brand footer-brand">
+        <Link to={`/?city=${selectedCity}`} className="brand footer-brand">
           <img className="brand-logo" src="/assets/orqeli-brand.png" alt="ORQELI home" width="920" height="202" />
         </Link>
         <span>Local care, booked simply.</span>
         <div>
-          <a href="/#how">How it works</a>
+          <a href={`/?city=${selectedCity}#how`}>How it works</a>
           <Link to="/business">For businesses</Link>
           <span>Kitwe · Ndola, Zambia</span>
         </div>
@@ -192,7 +201,9 @@ function ShellContent() {
 }
 
 function Home() {
-  const [city, setCity] = useState('Kitwe');
+  const [homeParams, setHomeParams] = useSearchParams();
+  const city = homeParams.get('city') === 'Ndola' ? 'Ndola' : 'Kitwe';
+  const setCity = (value: string) => setHomeParams({ city: value }, { replace: true });
   const [motionAllowed, setMotionAllowed] = useState(false);
   const [videoPaused, setVideoPaused] = useState(false);
   const navigate = useNavigate();
@@ -232,7 +243,7 @@ function Home() {
             </label>
             <button className="search-button" type="submit">Explore businesses <ArrowRight size={18} aria-hidden="true" /></button>
           </form>
-          <p className="hero-note">Early access · Business discovery and online booking are in development.</p>
+          <p className="hero-note">Explore approved local businesses · Online booking is coming soon.</p>
         </div>
         {motionAllowed && <button className="video-control" onClick={() => setVideoPaused(!videoPaused)} aria-pressed={videoPaused}>
           {videoPaused ? <Play size={14} /> : <Pause size={14} />}{videoPaused ? 'Play background' : 'Pause background'}
@@ -255,24 +266,11 @@ function Home() {
         </div>
       </section>
       <section className="coming" aria-labelledby="owner-heading">
-        <div><span className="eyebrow">FOR BUSINESS OWNERS</span><h2 id="owner-heading">Your business. A new way to be found.</h2><p>Bring your local business to ORQELI. Create an owner account and submit your business for review as we prepare to open discovery.</p></div>
+        <div><span className="eyebrow">FOR BUSINESS OWNERS</span><h2 id="owner-heading">Your business. A new way to be found.</h2><p>Bring your local business to ORQELI. Create an owner account and submit your business for review to appear in local discovery.</p></div>
         <Link to="/register?role=BUSINESS_OWNER" className="primary-button">Register your business <ArrowRight size={18} /></Link>
       </section>
     </>
   );
-}
-
-function DiscoverPage() {
-  const [params, setParams] = useSearchParams();
-  const city = params.get('city') === 'Ndola' ? 'Ndola' : 'Kitwe';
-  return <section className="portal"><div className="portal-card workspace-card">
-    <span className="eyebrow">LOCAL BUSINESS DISCOVERY</span>
-    <h1>Explore {city}</h1>
-    <p>Discover local services, closer to home.</p>
-    <label className="form-field"><span>Your city</span><select value={city} onChange={(event) => setParams({ city: event.target.value })}><option>Kitwe</option><option>Ndola</option></select></label>
-    <div className="discovery-empty"><Store size={32} /><h2>We’re preparing local discovery.</h2><p>Public business listings are not available yet. We’re welcoming business applications in {city}; online bookings will follow in a future release.</p></div>
-    <div className="workspace-actions"><Link to="/register?role=BUSINESS_OWNER" className="primary-button">Register your business <ArrowRight size={16} /></Link><Link to="/" className="text-link">Back to home</Link></div>
-  </div></section>;
 }
 
 function Portal({
