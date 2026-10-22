@@ -60,6 +60,29 @@ function assertNoSensitiveFields(payload: unknown): void {
   );
 }
 
+async function getCsrfToken(cookie?: string): Promise<string> {
+  const response = await fetch(`${baseUrl}/api/auth/csrf`, {
+    headers: cookie ? { cookie } : undefined
+  });
+  assert.equal(response.status, 200, 'CSRF bootstrap endpoint must succeed');
+  const body = (await response.json()) as { csrfToken: string };
+  assert.ok(body.csrfToken.length > 20, 'CSRF token must be returned');
+  return body.csrfToken;
+}
+
+/**
+ * Headers for a state-changing request: JSON body plus a CSRF token bound to the
+ * session the request is sent with (anonymous token when no cookie is passed).
+ */
+async function mutationHeaders(cookie?: string, extra: Record<string, string> = {}) {
+  return {
+    'content-type': 'application/json',
+    'x-csrf-token': await getCsrfToken(cookie),
+    ...(cookie ? { cookie } : {}),
+    ...extra
+  };
+}
+
 before(async () => {
   const adminPasswordHash = await hashPassword('AdminCorrectPass123!');
   repository.seedUser({
@@ -87,7 +110,7 @@ after(async () => {
 test('successful customer registration normalizes email, sets HttpOnly session cookie, and omits passwordHash', async () => {
   const response = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       name: '  Chanda Mwale  ',
       email: '  CHANDA.MWALE@Example.com ',
@@ -132,7 +155,7 @@ test('successful customer registration normalizes email, sets HttpOnly session c
 test('duplicate email registration is rejected with 409 even when casing or whitespace differs', async () => {
   const response = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       name: 'Another Chanda',
       email: '  chanda.mwale@EXAMPLE.com  ',
@@ -153,7 +176,7 @@ test('duplicate email registration is rejected with 409 even when casing or whit
 test('invalid registration input returns 400 with safe validation details', async () => {
   const response = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       name: 'A',
       email: 'not-an-email',
@@ -174,7 +197,7 @@ test('invalid registration input returns 400 with safe validation details', asyn
 test('public registration strictly prohibits creating an administrator account', async () => {
   const response = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       role: 'ADMIN',
       name: 'Attempted Admin',
@@ -194,7 +217,7 @@ test('public registration strictly prohibits creating an administrator account',
 test('business owner registration requires business details and creates a PENDING business awaiting manual verification', async () => {
   const missingBusinessRes = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       role: 'BUSINESS_OWNER',
       name: 'Mutale Banda',
@@ -206,7 +229,7 @@ test('business owner registration requires business details and creates a PENDIN
 
   const validOwnerRes = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       role: 'BUSINESS_OWNER',
       name: 'Mutale Banda',
@@ -256,7 +279,7 @@ test('successful login authenticates with Argon2, regenerates session ID, and re
   // First register a user to get an initial session cookie
   const initialReg = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       name: 'Bwalya Tembo',
       email: 'bwalya.tembo@example.com',
@@ -269,10 +292,7 @@ test('successful login authenticates with Argon2, regenerates session ID, and re
   // Now log in as Chanda while sending the pre-existing session cookie to test session fixation defense
   const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      cookie: initialCookie
-    },
+    headers: await mutationHeaders(initialCookie),
     body: JSON.stringify({
       email: '  CHANDA.MWALE@example.com ',
       password: 'CustomerPass123!'
@@ -316,7 +336,7 @@ test('successful login authenticates with Argon2, regenerates session ID, and re
 test('incorrect password and unknown email are rejected with a generic 401 error', async () => {
   const wrongPasswordRes = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       email: 'chanda.mwale@example.com',
       password: 'WrongPassword999!'
@@ -334,7 +354,7 @@ test('incorrect password and unknown email are rejected with a generic 401 error
 
   const unknownEmailRes = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       email: 'nonexistent.user@example.com',
       password: 'WrongPassword999!'
@@ -359,7 +379,7 @@ test('disabled and suspended accounts are rejected at login and during session r
 
   const disabledLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       email: 'disabled@example.com',
       password: 'SuspendedPass123!'
@@ -381,7 +401,7 @@ test('disabled and suspended accounts are rejected at login and during session r
 
   const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       email: activeToSuspend.email,
       password: 'SuspendedPass123!'
@@ -414,7 +434,7 @@ test('/api/auth/me returns 401 for unauthenticated requests and safe profile for
 
   const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       email: 'chanda.mwale@example.com',
       password: 'CustomerPass123!'
@@ -439,7 +459,7 @@ test('/api/auth/me returns 401 for unauthenticated requests and safe profile for
 test('logout destroys the server-side session in PostgreSQL store and invalidates the old session cookie', async () => {
   const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       email: 'chanda.mwale@example.com',
       password: 'CustomerPass123!'
@@ -490,7 +510,7 @@ test('unauthenticated requests are denied access to protected customer, owner, a
 test('customer is denied access to business-owner and administrator routes (403 FORBIDDEN)', async () => {
   const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       email: 'chanda.mwale@example.com',
       password: 'CustomerPass123!'
@@ -526,7 +546,7 @@ test('business-owner isolation prevents viewing or modifying another owner’s b
   // Register Owner B
   const ownerBReg = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       role: 'BUSINESS_OWNER',
       name: 'Kabwe Mulenga',
@@ -551,7 +571,7 @@ test('business-owner isolation prevents viewing or modifying another owner’s b
   // Log in as Owner A (Mutale Banda)
   const ownerALogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       email: 'mutale.banda@example.com',
       password: 'OwnerPassword123!'
@@ -589,10 +609,7 @@ test('business-owner isolation prevents viewing or modifying another owner’s b
     `${baseUrl}/api/owner/businesses/${ownerBBusinessId}`,
     {
       method: 'PATCH',
-      headers: {
-        'content-type': 'application/json',
-        cookie: ownerACookie
-      },
+      headers: await mutationHeaders(ownerACookie),
       body: JSON.stringify({ name: 'Hijacked Salon Name' })
     }
   );
@@ -614,10 +631,7 @@ test('business-owner isolation prevents viewing or modifying another owner’s b
     `${baseUrl}/api/owner/businesses/${ownerABusinessId}`,
     {
       method: 'PATCH',
-      headers: {
-        'content-type': 'application/json',
-        cookie: ownerACookie
-      },
+      headers: await mutationHeaders(ownerACookie),
       body: JSON.stringify({ status: 'APPROVED' })
     }
   );
@@ -628,10 +642,7 @@ test('business-owner isolation prevents viewing or modifying another owner’s b
     `${baseUrl}/api/admin/businesses/${ownerABusinessId}/status`,
     {
       method: 'PATCH',
-      headers: {
-        'content-type': 'application/json',
-        cookie: ownerACookie
-      },
+      headers: await mutationHeaders(ownerACookie),
       body: JSON.stringify({ status: 'APPROVED' })
     }
   );
@@ -642,10 +653,7 @@ test('business-owner isolation prevents viewing or modifying another owner’s b
     `${baseUrl}/api/owner/businesses/${ownerABusinessId}`,
     {
       method: 'PATCH',
-      headers: {
-        'content-type': 'application/json',
-        cookie: ownerACookie
-      },
+      headers: await mutationHeaders(ownerACookie),
       body: JSON.stringify({
         location: 'Parklands, Plot 42B, Kitwe'
       })
@@ -662,7 +670,7 @@ test('business-owner isolation prevents viewing or modifying another owner’s b
 test('administrator can review and approve pending businesses and list users without exposing password hashes', async () => {
   const adminLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: await mutationHeaders(),
     body: JSON.stringify({
       email: 'admin@orqeli.zm',
       password: 'AdminCorrectPass123!'
@@ -686,10 +694,7 @@ test('administrator can review and approve pending businesses and list users wit
     `${baseUrl}/api/admin/businesses/${targetBusiness.id}/status`,
     {
       method: 'PATCH',
-      headers: {
-        'content-type': 'application/json',
-        cookie: adminCookie
-      },
+      headers: await mutationHeaders(adminCookie),
       body: JSON.stringify({ status: 'APPROVED' })
     }
   );
@@ -865,4 +870,196 @@ test('PrismaDataRepository enforces ownerScope on business queries and maps P200
       }),
     (err: unknown) => err instanceof DuplicateFieldError && err.field === 'email'
   );
+});
+
+test('state-changing requests are rejected when the CSRF token is missing', async () => {
+  const tokenlessRequests = [
+    {
+      path: '/api/auth/register',
+      body: { name: 'No Token User', email: 'no.token.user@example.com', password: 'NoTokenPass123!' }
+    },
+    {
+      path: '/api/auth/login',
+      body: { email: 'chanda.mwale@example.com', password: 'CustomerPass123!' }
+    },
+    { path: '/api/auth/logout', body: {} }
+  ];
+
+  for (const request of tokenlessRequests) {
+    const response = await fetch(`${baseUrl}${request.path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request.body)
+    });
+    assert.equal(response.status, 403, `Expected 403 for token-less POST ${request.path}`);
+    const body = (await response.json()) as { error: { code: string } };
+    assert.equal(body.error.code, 'CSRF_MISSING');
+  }
+
+  // A request rejected for a missing token must not have side effects.
+  assert.equal(await repository.findUserByEmail('no.token.user@example.com'), null);
+});
+
+test('a CSRF token issued for an anonymous visitor cannot authorise an authenticated session', async () => {
+  const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: await mutationHeaders(),
+    body: JSON.stringify({
+      email: 'chanda.mwale@example.com',
+      password: 'CustomerPass123!'
+    })
+  });
+  assert.equal(loginRes.status, 200);
+  const cookie = extractSessionCookie(loginRes);
+  const { csrfToken: sessionToken } = (await loginRes.json()) as { csrfToken: string };
+
+  // Token fetched without the session cookie is scoped to the anonymous visitor.
+  const anonymousToken = await getCsrfToken();
+  assert.notEqual(anonymousToken, sessionToken);
+
+  const anonymousTokenAttempt = await fetch(`${baseUrl}/api/auth/logout`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      cookie,
+      'x-csrf-token': anonymousToken
+    }
+  });
+  assert.equal(anonymousTokenAttempt.status, 403);
+  const rejectedBody = (await anonymousTokenAttempt.json()) as { error: { code: string } };
+  assert.equal(rejectedBody.error.code, 'CSRF_INVALID');
+
+  // The session-scoped token does authorise the same request.
+  const validLogout = await fetch(`${baseUrl}/api/auth/logout`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      cookie,
+      'x-csrf-token': sessionToken
+    }
+  });
+  assert.equal(validLogout.status, 200);
+});
+
+test('an expired server-side session is rejected and cannot be refreshed into an authenticated request', async () => {
+  const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: await mutationHeaders(),
+    body: JSON.stringify({
+      email: 'chanda.mwale@example.com',
+      password: 'CustomerPass123!'
+    })
+  });
+  assert.equal(loginRes.status, 200);
+  const cookie = extractSessionCookie(loginRes);
+
+  const meRes = await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie } });
+  assert.equal(meRes.status, 200);
+
+  // Expire the row in the PostgreSQL session-store substitute, as the store's
+  // `expire >= to_timestamp($2)` predicate would see it after the TTL elapses.
+  const rawSid = decodeURIComponent(cookie.split('=').slice(1).join('=')).split('.')[0];
+  const sid = rawSid.startsWith('s:') ? rawSid.slice(2) : rawSid;
+  const storedSession = pgPool.inspectSessions().get(sid);
+  assert.ok(storedSession, 'Session row must exist in the store');
+  storedSession.expireEpochSeconds = Math.floor(Date.now() / 1000) - 60;
+
+  const expiredMe = await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie } });
+  assert.equal(expiredMe.status, 401);
+});
+
+test('duplicate phone numbers are rejected with a safe 409 response', async () => {
+  const first = await fetch(`${baseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: await mutationHeaders(),
+    body: JSON.stringify({
+      name: 'Phone Owner',
+      email: 'phone.owner@example.com',
+      phone: '+260970123456',
+      password: 'PhoneOwnerPass123!'
+    })
+  });
+  assert.equal(first.status, 201);
+
+  const duplicate = await fetch(`${baseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: await mutationHeaders(),
+    body: JSON.stringify({
+      name: 'Phone Duplicate',
+      email: 'phone.duplicate@example.com',
+      phone: '+260970123456',
+      password: 'PhoneOwnerPass123!'
+    })
+  });
+  assert.equal(duplicate.status, 409);
+  const body = await duplicate.json();
+  assert.deepEqual(body, {
+    error: {
+      code: 'PHONE_ALREADY_IN_USE',
+      message: 'An account with this phone number already exists.'
+    }
+  });
+  assertNoSensitiveFields(body);
+});
+
+test('administrators cannot disable or suspend their own account', async () => {
+  const adminLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: await mutationHeaders(),
+    body: JSON.stringify({ email: 'admin@orqeli.zm', password: 'AdminCorrectPass123!' })
+  });
+  assert.equal(adminLogin.status, 200);
+  const adminCookie = extractSessionCookie(adminLogin);
+
+  const selfDisable = await fetch(`${baseUrl}/api/admin/users/usr_seeded_admin/status`, {
+    method: 'PATCH',
+    headers: await mutationHeaders(adminCookie),
+    body: JSON.stringify({ status: 'DISABLED' })
+  });
+  assert.equal(selfDisable.status, 400);
+  const body = (await selfDisable.json()) as { error: { code: string } };
+  assert.equal(body.error.code, 'SELF_STATUS_CHANGE_FORBIDDEN');
+});
+
+test('a business owner whose business is suspended cannot authenticate', async () => {
+  const ownerRes = await fetch(`${baseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: await mutationHeaders(),
+    body: JSON.stringify({
+      role: 'BUSINESS_OWNER',
+      name: 'Suspended Owner',
+      email: 'suspended.owner@example.com',
+      password: 'SuspendedOwnerPass123!',
+      business: {
+        name: 'Suspended Cuts',
+        city: 'Kitwe',
+        location: 'Chibuluma Road 7',
+        phone: '+260961222333'
+      }
+    })
+  });
+  assert.equal(ownerRes.status, 201);
+  const ownerBody = (await ownerRes.json()) as {
+    user: { id: string; ownedBusinesses: Array<{ id: string; status: string }> };
+  };
+  assert.equal(ownerBody.user.ownedBusinesses[0].status, 'PENDING');
+
+  await repository.updateBusinessStatusForAdmin(
+    { id: 'usr_seeded_admin', role: 'ADMIN' },
+    ownerBody.user.ownedBusinesses[0].id,
+    'SUSPENDED'
+  );
+
+  const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: await mutationHeaders(),
+    body: JSON.stringify({
+      email: 'suspended.owner@example.com',
+      password: 'SuspendedOwnerPass123!'
+    })
+  });
+  assert.equal(loginRes.status, 403);
+  const body = (await loginRes.json()) as { error: { code: string } };
+  assert.equal(body.error.code, 'ACCOUNT_SUSPENDED');
+  assertNoSensitiveFields(body);
 });

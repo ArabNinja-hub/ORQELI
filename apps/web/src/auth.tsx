@@ -78,7 +78,32 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-async function parseApiResponse<T>(response: Response): Promise<T> {
+const NETWORK_ERROR_MESSAGE =
+  'The ORQELI API could not be reached. Check that the API is running and that the web dev server proxies /api to the API port.';
+
+/**
+ * fetch() throws a TypeError (with no HTTP status) when the browser cannot reach
+ * the server at all. Surfacing that as an ApiRequestError keeps the UI message
+ * actionable instead of the generic "request could not be completed" fallback.
+ */
+async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch {
+    throw new ApiRequestError(0, 'NETWORK_ERROR', NETWORK_ERROR_MESSAGE);
+  }
+}
+
+async function readApiErrorCode(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as { error?: { code?: string } } | null;
+    return body?.error?.code ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function parseApiResponse<T>(response: Response): Promise<T> {
   const contentType = response.headers.get('content-type') ?? '';
   const isJson = contentType.includes('application/json');
   const body = isJson ? await response.json() : null;
@@ -95,11 +120,29 @@ async function parseApiResponse<T>(response: Response): Promise<T> {
           }).error
         : undefined;
 
+    if (!isJson) {
+      // Typically the Vite dev proxy failing to reach the API (it answers with a
+      // plain-text 500). Report the status so the misconfiguration is visible.
+      throw new ApiRequestError(
+        response.status,
+        'UNEXPECTED_RESPONSE',
+        `The ORQELI API returned an unexpected response (HTTP ${response.status}). Check that the API is running on the port the web dev server proxies /api to.`
+      );
+    }
+
     throw new ApiRequestError(
       response.status,
       errorObj?.code ?? 'REQUEST_FAILED',
       errorObj?.message ?? 'The request could not be completed.',
       Array.isArray(errorObj?.details) ? errorObj.details : []
+    );
+  }
+
+  if (!isJson) {
+    throw new ApiRequestError(
+      response.status,
+      'UNEXPECTED_RESPONSE',
+      `The ORQELI API returned an unexpected response (HTTP ${response.status}). Check that the API is running on the port the web dev server proxies /api to.`
     );
   }
 
@@ -111,11 +154,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthenticatedUserProfile | null>(null);
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
 
-  const ensureCsrfToken = useCallback(async (currentToken: string | null): Promise<string> => {
-    if (currentToken) {
-      return currentToken;
-    }
-    const response = await fetch('/api/auth/csrf', {
+  const requestCsrfToken = useCallback(async (): Promise<string> => {
+    const response = await safeFetch('/api/auth/csrf', {
       method: 'GET',
       credentials: 'include'
     });
@@ -124,45 +164,72 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return data.csrfToken;
   }, []);
 
+  const ensureCsrfToken = useCallback(
+    async (currentToken: string | null): Promise<string> => {
+      if (currentToken) {
+        return currentToken;
+      }
+      return requestCsrfToken();
+    },
+    [requestCsrfToken]
+  );
+
   const apiFetch = useCallback(
     async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
       const method = (init.method ?? 'GET').toUpperCase();
-      const headers = new Headers(init.headers);
+      const isStateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
 
-      if (init.body && !headers.has('Content-Type')) {
-        headers.set('Content-Type', 'application/json');
+      const send = async (token: string | null): Promise<Response> => {
+        const headers = new Headers(init.headers);
+
+        if (init.body && !headers.has('Content-Type')) {
+          headers.set('Content-Type', 'application/json');
+        }
+
+        if (isStateChanging) {
+          headers.set('X-CSRF-Token', await ensureCsrfToken(token));
+        }
+
+        return safeFetch(path, {
+          ...init,
+          method,
+          headers,
+          credentials: 'include'
+        });
+      };
+
+      let response = await send(csrfToken);
+
+      if (isStateChanging && response.status === 403) {
+        // The token can go stale when the session is rotated elsewhere (another
+        // tab logs in or out). Refresh it once and retry before surfacing an error.
+        const errorCode = await readApiErrorCode(response.clone());
+        if (errorCode === 'CSRF_INVALID' || errorCode === 'CSRF_MISSING') {
+          const freshToken = await requestCsrfToken();
+          response = await send(freshToken);
+        }
       }
-
-      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-        const token = await ensureCsrfToken(csrfToken);
-        headers.set('X-CSRF-Token', token);
-      }
-
-      const response = await fetch(path, {
-        ...init,
-        method,
-        headers,
-        credentials: 'include'
-      });
 
       if (response.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/me') {
         setUser(null);
+        setCsrfToken(null);
         setStatus('unauthenticated');
       }
 
       return parseApiResponse<T>(response);
     },
-    [csrfToken, ensureCsrfToken]
+    [csrfToken, ensureCsrfToken, requestCsrfToken]
   );
 
   const refreshSession = useCallback(async (): Promise<AuthenticatedUserProfile | null> => {
     try {
-      const response = await fetch('/api/auth/me', {
+      const response = await safeFetch('/api/auth/me', {
         method: 'GET',
         credentials: 'include'
       });
       if (response.status === 401) {
         setUser(null);
+        setCsrfToken(null);
         setStatus('unauthenticated');
         return null;
       }

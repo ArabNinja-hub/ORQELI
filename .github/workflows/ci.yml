@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'feature/**', 'fix/**', 'arena/**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Migrate, typecheck, test, build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: orqeli
+          POSTGRES_PASSWORD: orqeli_ci_password
+          POSTGRES_DB: orqeli
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U orqeli -d orqeli"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Throwaway credentials for the ephemeral CI database only. Never used outside CI.
+      DATABASE_URL: postgresql://orqeli:orqeli_ci_password@127.0.0.1:5432/orqeli?schema=public
+      SHADOW_DATABASE_URL: postgresql://orqeli:orqeli_ci_password@127.0.0.1:5432/orqeli_shadow?schema=public
+      SESSION_SECRET: ci-only-session-secret-value-with-at-least-32-characters
+      WEB_ORIGIN: http://localhost:5173
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Prisma schema
+        run: npm run db:validate
+
+      - name: Generate Prisma Client
+        run: npm run db:generate
+
+      - name: Typecheck API and web
+        run: npm run typecheck
+
+      - name: Create shadow database
+        run: >-
+          PGPASSWORD=orqeli_ci_password psql -h 127.0.0.1 -U orqeli -d orqeli
+          -v ON_ERROR_STOP=1 -c 'CREATE DATABASE orqeli_shadow'
+
+      - name: Apply committed migrations
+        run: npm run db:deploy
+
+      - name: Migration status
+        run: npm run db:status
+
+      - name: Fail if migrations drift from schema.prisma
+        working-directory: apps/api
+        run: >-
+          npx prisma migrate diff
+          --from-migrations prisma/migrations
+          --to-schema-datamodel prisma/schema.prisma
+          --shadow-database-url "$SHADOW_DATABASE_URL"
+          --exit-code
+
+      - name: Test
+        run: npm test
+
+      - name: Verify registration and session flows against PostgreSQL
+        run: npm run db:verify-flow -w @orqeli/api
+
+      - name: Production build
+        run: npm run build
