@@ -83,7 +83,16 @@ jobs:
         run: npm run db:verify-flow -w @orqeli/api
 
       - name: Verify discovery against PostgreSQL (Kitwe/Ndola, approval, pagination, privacy)
-        run: npm run db:verify-discovery -w @orqeli/api
+        run: |
+          set -o pipefail
+          npm run db:verify-discovery -w @orqeli/api 2>&1 | tee /tmp/discovery.log
+      - name: Upload discovery verification log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-log
+          path: /tmp/discovery.log
+          if-no-files-found: warn
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
