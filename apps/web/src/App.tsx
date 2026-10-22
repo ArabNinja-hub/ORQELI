@@ -19,6 +19,7 @@ import {
   LogOut,
   MapPin,
   Menu,
+  Play,
   Plus,
   Scissors,
   ShieldCheck,
@@ -192,23 +193,67 @@ function ShellContent() {
 
 function Home() {
   const [city, setCity] = useState('Kitwe');
+  const [videoLoaded, setVideoLoaded] = useState(false);
+  const navigate = useNavigate();
+  const prefersReducedMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const handleExplore = (event: React.FormEvent) => {
+    event.preventDefault();
+    navigate('/business');
+  };
+
   return (
     <>
-      <section className="hero">
-        <div className="hero-content">
-          <div className="eyebrow">
-            <span className="eyebrow-line" /> MADE FOR YOUR EVERYDAY
+      <section className="hero-video">
+        <div className="hero-video-media" aria-hidden="true">
+          <div className="hero-video-poster" />
+          {!prefersReducedMotion && (
+            <video
+              className={videoLoaded ? 'is-loaded' : ''}
+              src="/assets/orqeli-hero.mp4"
+              autoPlay
+              loop
+              muted
+              playsInline
+              preload="auto"
+              onCanPlay={() => setVideoLoaded(true)}
+              onLoadedData={() => setVideoLoaded(true)}
+            />
+          )}
+          <div className="hero-video-overlay" />
+        </div>
+
+        <div className="hero-video-content">
+          <img
+            className="hero-logo"
+            src="/assets/orqeli-logo.jpeg"
+            alt="ORQELI — Connecting Business. Creating Growth."
+            width="560"
+            height="306"
+            loading="eager"
+            decoding="async"
+          />
+
+          <div className="eyebrow hero-eyebrow">
+            <span className="eyebrow-line" /> COPPERBELT, ZAMBIA
           </div>
-          <h1>
-            Good days
+
+          <h1 className="hero-title">
+            Connecting Business.
             <br />
-            start <em>right here.</em>
+            <em>Creating Growth.</em>
           </h1>
-          <p className="hero-copy">
-            Find your next favourite barber or salon in Copperbelt. Discover local care,
-            all in one place.
+
+          <p className="hero-lead">
+            Discover trusted local barbershops, salons and service businesses across
+            Kitwe and Ndola. Book instantly, support your community, and grow with
+            ORQELI — the marketplace made for your everyday.
           </p>
-          <form className="search-panel" onSubmit={(e) => e.preventDefault()}>
+
+          <form className="hero-search" onSubmit={handleExplore}>
             <label className="city-field">
               <MapPin size={18} />
               <span className="field-copy">
@@ -228,47 +273,14 @@ function Home() {
               Explore businesses <ArrowRight size={17} />
             </button>
           </form>
-          <p className="availability-note">
-            <span className="note-dot" /> Starting in Kitwe and Ndola
-          </p>
-        </div>
-        <div className="hero-art" aria-label="Illustration of a calm salon interior">
-          <div className="sun-disc" />
-          <div className="plant plant-a">
-            <i />
-            <i />
-            <i />
-            <b />
-          </div>
-          <div className="arch">
-            <div className="arch-inner">
-              <div className="mirror">
-                <span />
-              </div>
-              <div className="counter">
-                <div className="bottle" />
-                <div className="bottle small" />
-              </div>
-            </div>
-          </div>
-          <div className="chair">
-            <div className="chair-back" />
-            <div className="chair-seat" />
-            <div className="chair-post" />
-            <div className="chair-foot" />
-          </div>
-          <div className="plant plant-b">
-            <i />
-            <i />
-            <i />
-            <b />
-          </div>
-          <div className="art-caption">
-            <span>YOUR NEXT SELF-CARE MOMENT</span>
-            <b>Just around the corner.</b>
-          </div>
-          <div className="art-sparkle">
-            <Sparkles size={16} />
+
+          <div className="hero-cta-row">
+            <Link to="/register?role=BUSINESS_OWNER" className="hero-cta-secondary">
+              <Play size={13} /> List your business
+            </Link>
+            <span className="availability-note hero-note">
+              <span className="note-dot" /> Local care, booked simply — starting in Kitwe &amp; Ndola
+            </span>
           </div>
         </div>
       </section>
