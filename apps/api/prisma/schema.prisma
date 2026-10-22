@@ -13,6 +13,12 @@ enum UserRole {
   ADMIN
 }
 
+enum UserStatus {
+  ACTIVE
+  DISABLED
+  SUSPENDED
+}
+
 enum BusinessStatus {
   PENDING
   APPROVED
@@ -34,6 +40,7 @@ model User {
   name             String
   passwordHash     String?
   role             UserRole     @default(CUSTOMER)
+  status           UserStatus   @default(ACTIVE)
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
   ownedBusinesses  Business[]   @relation("BusinessOwner")
@@ -120,4 +127,13 @@ model AuditEvent {
   createdAt   DateTime @default(now())
   @@index([entityType, entityId, createdAt])
   @@index([actorId, createdAt])
+}
+
+model Session {
+  sid    String   @id @db.VarChar
+  sess   Json     @db.Json
+  expire DateTime @db.Timestamp(6)
+
+  @@index([expire], map: "IDX_session_expire")
+  @@map("session")
 }
