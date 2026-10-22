@@ -1,3 +1,5 @@
+import { DISCOVERY_PAGE_SIZE, discoveryWhere, publicBusinessSelect, publicBusinessWhere,
+  type DiscoveryQuery, type DiscoveryResult, type PublicBusiness, type PublicService } from './discovery.js';
 import crypto from 'node:crypto';
 import type { PrismaClient, Prisma } from '@prisma/client';
 import {
@@ -154,6 +156,8 @@ export function toSafeUser(record: StoredUserRecord): SafeUserProfile {
 }
 
 export interface DataRepository {
+  discoverBusinesses(query: DiscoveryQuery): Promise<DiscoveryResult>;
+  getPublicBusiness(id: string, city: string): Promise<PublicBusiness | null>;
   findUserByEmail(email: string): Promise<StoredUserRecord | null>;
   findUserById(id: string): Promise<StoredUserRecord | null>;
   createCustomerUser(input: {
@@ -233,6 +237,22 @@ export class PrismaDataRepository implements DataRepository {
 
   constructor(prisma: PrismaClient) {
     this.prisma = prisma;
+  }
+
+  async discoverBusinesses(query: DiscoveryQuery): Promise<DiscoveryResult> {
+    const rows = await this.prisma.business.findMany({
+      where: discoveryWhere(query), select: publicBusinessSelect,
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      skip: (query.page - 1) * DISCOVERY_PAGE_SIZE, take: DISCOVERY_PAGE_SIZE + 1
+    });
+    return { businesses: rows.slice(0, DISCOVERY_PAGE_SIZE), page: query.page,
+      hasMore: rows.length > DISCOVERY_PAGE_SIZE };
+  }
+
+  async getPublicBusiness(id: string, city: string): Promise<PublicBusiness | null> {
+    return this.prisma.business.findFirst({
+      where: { ...publicBusinessWhere(city), id }, select: publicBusinessSelect
+    });
   }
 
   async findUserByEmail(email: string): Promise<StoredUserRecord | null> {
@@ -662,6 +682,44 @@ export class PrismaDataRepository implements DataRepository {
 }
 
 export class InMemoryDataRepository implements DataRepository {
+  private readonly publicServices = new Map<string, PublicService & { businessId: string; active: boolean }>();
+
+  // Test-only fixtures. Production always uses PrismaDataRepository.
+  seedService(service: PublicService & { businessId: string; active: boolean }): void {
+    this.publicServices.set(service.id, service);
+  }
+
+  private publicRecord(record: StoredBusinessRecord): PublicBusiness | null {
+    if (record.status !== 'APPROVED' || this.users.get(record.ownerId)?.status !== 'ACTIVE') return null;
+    const services = [...this.publicServices.values()]
+      .filter(service => service.businessId === record.id && service.active)
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+      .map(({ id, name, description, durationMinutes, priceMinorUnits, currency }) =>
+        ({ id, name, description, durationMinutes, priceMinorUnits, currency }));
+    const { id, name, description, city, location, phone, email } = record;
+    return { id, name, description, city, location, phone, email, services };
+  }
+
+  async discoverBusinesses(query: DiscoveryQuery): Promise<DiscoveryResult> {
+    const term = query.q.toLowerCase();
+    const rows = [...this.businesses.values()]
+      .filter(business => business.city.toLowerCase() === query.city.toLowerCase())
+      .map(business => this.publicRecord(business))
+      .filter((business): business is PublicBusiness => business !== null)
+      .filter(business => !query.hasServices || business.services.length > 0)
+      .filter(business => !term || [business.name, business.description ?? '', ...business.services.map(s => s.name)]
+        .some(value => value.toLowerCase().includes(term)))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    const offset = (query.page - 1) * DISCOVERY_PAGE_SIZE;
+    return { businesses: rows.slice(offset, offset + DISCOVERY_PAGE_SIZE), page: query.page,
+      hasMore: rows.length > offset + DISCOVERY_PAGE_SIZE };
+  }
+
+  async getPublicBusiness(id: string, city: string): Promise<PublicBusiness | null> {
+    const record = this.businesses.get(id);
+    return record && record.city.toLowerCase() === city.toLowerCase() ? this.publicRecord(record) : null;
+  }
+
   private readonly users = new Map<string, Omit<StoredUserRecord, 'ownedBusinesses'>>();
   private readonly businesses = new Map<string, StoredBusinessRecord>();
   private readonly bookings = new Map<string, SafeBookingSummary>();

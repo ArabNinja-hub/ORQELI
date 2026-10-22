@@ -1,3 +1,4 @@
+import { discoveryQuerySchema, profileQuerySchema, publicBusinessIdSchema } from './discovery.js';
 import express from 'express';
 import type session from 'express-session';
 import cors from 'cors';
@@ -130,6 +131,29 @@ export function createApp(options: CreateAppOptions = {}) {
   instance.use(express.json({ limit: '32kb' }));
 
   instance.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
+
+  // Public reads have no session dependency and never grant a role-based approval bypass.
+  // Avoid cached listings/profiles remaining visible after suspension or rejection.
+  instance.get('/api/businesses', async (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const query = discoveryQuerySchema.parse(req.query);
+      return res.json(await repository.discoverBusinesses(query));
+    } catch (error) { return next(error); }
+  });
+
+  instance.get('/api/businesses/:businessId', async (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const id = publicBusinessIdSchema.parse(req.params.businessId);
+      const { city } = profileQuerySchema.parse(req.query);
+      const business = await repository.getPublicBusiness(id, city);
+      if (!business) return res.status(404).json({ error: {
+        code: 'NOT_FOUND', message: 'The requested business is not available.'
+      } });
+      return res.json({ business });
+    } catch (error) { return next(error); }
+  });
 
   const sessionMiddleware = createSessionMiddleware(config, sessionStore);
   const csrfMiddleware = createCsrfProtectionMiddleware(config);
