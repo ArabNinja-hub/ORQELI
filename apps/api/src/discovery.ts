@@ -1,8 +1,5 @@
 import { z } from 'zod';
-// Prisma generated types are not available when the client has not been generated (offline CI/sandbox stub).
-// Use permissive types so typechecking still passes; runtime queries remain strictly allowlisted.
-type BusinessSelectStub = any;
-type BusinessWhereStub = any;
+import type { Prisma } from '@prisma/client';
 
 export const publicCitySchema = z.enum(['Kitwe', 'Ndola']);
 export const discoveryQuerySchema = z
@@ -70,9 +67,9 @@ export const publicBusinessSelect = {
       currency: true
     }
   }
-} satisfies BusinessSelectStub;
+} satisfies Prisma.BusinessSelect;
 
-export function publicBusinessWhere(city: string): BusinessWhereStub {
+export function publicBusinessWhere(city: string): Prisma.BusinessWhereInput {
   return {
     city: { equals: city, mode: 'insensitive' },
     status: 'APPROVED',
@@ -80,7 +77,7 @@ export function publicBusinessWhere(city: string): BusinessWhereStub {
   };
 }
 
-export function discoveryWhere(query: DiscoveryQuery): BusinessWhereStub {
+export function discoveryWhere(query: DiscoveryQuery): Prisma.BusinessWhereInput {
   // Prisma contains uses SQL LIKE; escape wildcard characters for literal search.
   const term = query.q.replace(/[\\%_]/g, '\\$&');
   return {

@@ -1,9 +1,7 @@
 import { DISCOVERY_PAGE_SIZE, discoveryWhere, publicBusinessSelect, publicBusinessWhere,
   type DiscoveryQuery, type DiscoveryResult, type PublicBusiness, type PublicService } from './discovery.js';
 import crypto from 'node:crypto';
-import type { PrismaClient } from '@prisma/client';
-// Prisma Json helper not present in stub client; fallback to unknown.
-type PrismaInputJsonValue = unknown;
+import type { PrismaClient, Prisma } from '@prisma/client';
 import {
   ownerScope,
   type AuthenticatedUser,
@@ -292,7 +290,7 @@ export class PrismaDataRepository implements DataRepository {
     const normalizedPhone = normalizePhone(input.phone);
 
     try {
-      const created = await this.prisma.$transaction(async (tx: any) => {
+      const created = await this.prisma.$transaction(async (tx) => {
         const user = await tx.user.create({
           data: {
             name: input.name.trim(),
@@ -338,7 +336,7 @@ export class PrismaDataRepository implements DataRepository {
     const businessEmail = input.business.email ? normalizeEmail(input.business.email) : null;
 
     try {
-      const created = await this.prisma.$transaction(async (tx: any) => {
+      const created = await this.prisma.$transaction(async (tx) => {
         const user = await tx.user.create({
           data: {
             name: input.name.trim(),
@@ -404,7 +402,7 @@ export class PrismaDataRepository implements DataRepository {
         action: input.action,
         entityType: input.entityType,
         entityId: input.entityId,
-        metadata: (input.metadata ?? undefined) as PrismaInputJsonValue | undefined
+        metadata: (input.metadata ?? undefined) as Prisma.InputJsonValue | undefined
       }
     });
   }
@@ -414,7 +412,7 @@ export class PrismaDataRepository implements DataRepository {
       where: { customerUserId },
       orderBy: { startsAt: 'desc' }
     });
-    return bookings.map((b: any) => ({
+    return bookings.map((b) => ({
       id: b.id,
       reference: b.reference,
       businessId: b.businessId,
@@ -437,7 +435,7 @@ export class PrismaDataRepository implements DataRepository {
       where: { ownerId: scope.ownerId },
       orderBy: { createdAt: 'desc' }
     });
-    return businesses.map((b: any) => toSafeBusiness(b as StoredBusinessRecord));
+    return businesses.map((b) => toSafeBusiness(b as StoredBusinessRecord));
   }
 
   async getBusinessForOwner(
@@ -461,7 +459,7 @@ export class PrismaDataRepository implements DataRepository {
     const scope = ownerScope(user);
     const businessEmail = input.email ? normalizeEmail(input.email) : null;
 
-    const business = await this.prisma.$transaction(async (tx: any) => {
+    const business = await this.prisma.$transaction(async (tx) => {
       const created = await tx.business.create({
         data: {
           ownerId: scope.ownerId,
@@ -551,7 +549,7 @@ export class PrismaDataRepository implements DataRepository {
       }
     });
 
-    return businesses.map((b: any) => ({
+    return businesses.map((b) => ({
       ...toSafeBusiness(b as StoredBusinessRecord),
       owner: {
         id: b.owner.id,
@@ -579,7 +577,7 @@ export class PrismaDataRepository implements DataRepository {
       return null;
     }
 
-    const updated = await this.prisma.$transaction(async (tx: any) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const record = await tx.business.update({
         where: { id: businessId },
         data: { status },
@@ -633,7 +631,7 @@ export class PrismaDataRepository implements DataRepository {
         }
       }
     });
-    return users.map((u: any) => toSafeUser(u as StoredUserRecord));
+    return users.map((u) => toSafeUser(u as StoredUserRecord));
   }
 
   async updateUserStatusForAdmin(
@@ -652,7 +650,7 @@ export class PrismaDataRepository implements DataRepository {
       return null;
     }
 
-    const updated = await this.prisma.$transaction(async (tx: any) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.update({
         where: { id: targetUserId },
         data: { status },
@@ -1055,7 +1053,7 @@ export class InMemoryDataRepository implements DataRepository {
       .filter((b) => (filter?.status ? b.status === filter.status : true))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
-    return items.map((b: any) => {
+    return items.map((b) => {
       const owner = this.users.get(b.ownerId);
       return {
         ...toSafeBusiness(b),
