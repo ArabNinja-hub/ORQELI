@@ -82,5 +82,22 @@ jobs:
       - name: Verify registration and session flows against PostgreSQL
         run: npm run db:verify-flow -w @orqeli/api
 
+      - name: Verify discovery against PostgreSQL (Kitwe/Ndola, approval, pagination, privacy)
+        run: npm run db:verify-discovery -w @orqeli/api
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright discovery tests (desktop + mobile)
+        run: |
+          npm run dev -w @orqeli/web -- --host 127.0.0.1 --port 5173 &
+          echo $! > /tmp/web_pid
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:5173 >/dev/null && break; sleep 1; done
+          curl -fs http://127.0.0.1:5173 >/dev/null
+          npm run test:e2e -w @orqeli/web
+          kill $(cat /tmp/web_pid) || true
+        env:
+          E2E_BASE_URL: http://127.0.0.1:5173
+
       - name: Production build
         run: npm run build
