@@ -4,18 +4,19 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { resolveApiProxyTarget } from './src/apiProxy.js';
 
 const workspaceRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 /**
- * Reads the API port from the same repository-root .env files the API uses, so the
- * dev proxy cannot drift from the port the API actually listens on.
+ * Reads the same repository-root `.env` files the API reads so the dev proxy can
+ * never point at a different port than the API listens on.
  *
  * This deliberately does not use Vite's loadEnv(): loadEnv() copies NODE_ENV from
  * .env into process.env, which would turn `vite build` into a development React
  * bundle whenever .env contains NODE_ENV="development".
  */
-function resolveApiProxyTarget(): string {
+function readWorkspaceEnvFileValues(): Record<string, string> {
   const fileValues: Record<string, string> = {};
 
   for (const fileName of ['.env', '.env.local']) {
@@ -25,13 +26,7 @@ function resolveApiProxyTarget(): string {
     }
   }
 
-  // Real environment variables win over .env values, matching the API's dotenv use.
-  const read = (key: string): string => (process.env[key] ?? fileValues[key] ?? '').trim();
-  const apiPort = read('PORT') || '4000';
-
-  // 127.0.0.1 keeps the proxy on IPv4, which is the address the API binds
-  // (`app.listen(port, '0.0.0.0')`). "localhost" can resolve to IPv6 first.
-  return read('VITE_API_PROXY_TARGET') || `http://127.0.0.1:${apiPort}`;
+  return fileValues;
 }
 
 export default defineConfig(() => ({
@@ -41,7 +36,7 @@ export default defineConfig(() => ({
     allowedHosts: true,
     proxy: {
       '/api': {
-        target: resolveApiProxyTarget(),
+        target: resolveApiProxyTarget({ fileValues: readWorkspaceEnvFileValues() }),
         changeOrigin: true
       }
     }
