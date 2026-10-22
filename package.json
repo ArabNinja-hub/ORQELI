@@ -1,0 +1,19 @@
+{
+  "name": "orqeli",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["apps/web", "apps/api"],
+  "scripts": {
+    "dev": "concurrently -n web,api -c cyan,magenta \"npm run dev -w @orqeli/web\" \"npm run dev -w @orqeli/api\"",
+    "build": "npm run build -w @orqeli/api && npm run build -w @orqeli/web",
+    "typecheck": "npm run typecheck -w @orqeli/api && npm run typecheck -w @orqeli/web",
+    "test": "npm run test -w @orqeli/api",
+    "db:validate": "npm run db:validate -w @orqeli/api",
+    "db:generate": "npm run db:generate -w @orqeli/api",
+    "db:migrate": "npm run db:migrate -w @orqeli/api --",
+    "db:deploy": "npm run db:deploy -w @orqeli/api",
+    "db:status": "npm run db:status -w @orqeli/api",
+    "db:studio": "npm run db:studio -w @orqeli/api"
+  },
+  "devDependencies": { "concurrently": "^9.2.1", "typescript": "^5.9.3" }
+}
