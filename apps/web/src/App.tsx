@@ -226,8 +226,11 @@ function Home() {
           <div className="hero-video-overlay" />
         </div>
         <div className="hero-video-content">
-          <div className="eyebrow hero-eyebrow">LOCAL SERVICES. A BETTER CONNECTION.</div>
-          <h1 id="hero-heading">Your next appointment.<br /><span>Closer to home.</span></h1>
+          <div className="eyebrow hero-eyebrow">LOCAL SERVICES · KITWE & NDOLA</div>
+          <h1 id="hero-heading" className="hero-slogan">
+            <span className="slogan-line slogan-connect">Connecting Business</span>
+            <span className="slogan-line slogan-growth">Creating Growth</span>
+          </h1>
           <p className="hero-lead">A simpler way to discover barbershops, salons and local services. Starting with Kitwe and Ndola.</p>
           <form className="hero-search" onSubmit={(event) => {
             event.preventDefault();
