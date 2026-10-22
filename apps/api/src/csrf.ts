@@ -40,7 +40,10 @@ export function verifyCsrfToken(
     return false;
   }
 
-  const candidateScopes = csrfSecret ? [csrfSecret, 'anon'] : ['anon'];
+  // A token bound to the current session is required once a session has a CSRF
+  // secret. Anonymous tokens are only accepted for requests that are not yet
+  // bound to an authenticated session (registration, login, csrf bootstrap).
+  const candidateScopes = csrfSecret ? [csrfSecret] : ['anon'];
   for (const scope of candidateScopes) {
     const expectedSignature = computeHmac(sessionSecret, scope, nonce);
     const providedBuf = Buffer.from(providedSignature, 'utf8');
@@ -133,23 +136,35 @@ export function createCsrfProtectionMiddleware(config: AppEnv): RequestHandler {
       return;
     }
 
+    // A state-changing request must present a valid token. The previous
+    // implementation only verified the header when it was present, which made the
+    // token optional for any client (curl, another origin that omits Origin, ...)
+    // and left only the Origin/Referer checks as real protection.
     const csrfHeader = req.headers['x-csrf-token'];
-    if (csrfHeader !== undefined) {
-      const tokenValue = Array.isArray(csrfHeader) ? csrfHeader[0] : csrfHeader;
-      const valid = verifyCsrfToken(
-        tokenValue ?? '',
-        config.SESSION_SECRET,
-        req.session?.csrfSecret
-      );
-      if (!valid) {
-        res.status(403).json({
-          error: {
-            code: 'CSRF_INVALID',
-            message: 'Invalid or expired CSRF token.'
-          }
-        });
-        return;
-      }
+    const tokenValue = Array.isArray(csrfHeader) ? csrfHeader[0] : csrfHeader;
+    if (typeof tokenValue !== 'string' || tokenValue.length === 0) {
+      res.status(403).json({
+        error: {
+          code: 'CSRF_MISSING',
+          message: 'A CSRF token is required for this request.'
+        }
+      });
+      return;
+    }
+
+    const valid = verifyCsrfToken(
+      tokenValue,
+      config.SESSION_SECRET,
+      req.session?.csrfSecret
+    );
+    if (!valid) {
+      res.status(403).json({
+        error: {
+          code: 'CSRF_INVALID',
+          message: 'Invalid or expired CSRF token.'
+        }
+      });
+      return;
     }
 
     next();

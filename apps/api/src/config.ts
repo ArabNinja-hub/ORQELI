@@ -1,5 +1,24 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+
+// npm runs workspace scripts with the workspace directory as the current working
+// directory, so `dotenv/config` (cwd/.env) misses the repository-root `.env` that
+// the setup instructions ask developers to create. Resolve both locations
+// explicitly, from this file's own path, so the API loads the same configuration
+// whether it is started from the repository root, from apps/api, or from dist/.
+export function resolveEnvFilePaths(moduleDirectory: string): string[] {
+  const packageDirectory = path.resolve(moduleDirectory, '..'); // apps/api (from src/ or dist/)
+  const workspaceRoot = path.resolve(packageDirectory, '..', '..'); // repository root
+  return [path.join(packageDirectory, '.env'), path.join(workspaceRoot, '.env')];
+}
+
+for (const envFilePath of resolveEnvFilePaths(path.dirname(fileURLToPath(import.meta.url)))) {
+  // dotenv never overrides variables that are already set, so real environment
+  // variables (CI, deployment, tests) always win over file values.
+  dotenv.config({ path: envFilePath });
+}
 
 const INSECURE_PLACEHOLDER_SECRETS = new Set([
   'replace_with_a_random_secret_of_at_least_32_characters',

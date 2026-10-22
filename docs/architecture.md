@@ -6,7 +6,7 @@
 
 ## Responsibilities
 
-- Web: responsive public entry shell and navigation placeholders only. It has no privileged control surface and does not persist authentication data in local storage.
+- Web: the public shell plus customer, business-owner, and administrator views. Authorization is enforced by the API on every request; the client never holds a session token in JavaScript-readable storage (the session lives in an `HttpOnly` cookie) and keeps only the CSRF token and the safe user profile in memory.
 - API: JSON HTTP boundary, runtime environment validation, security headers, origin-restricted CORS, generic errors, database client, and role/owner authorization primitives.
 - PostgreSQL: durable relational records, foreign keys, uniqueness and indexes. Prisma schema is the source of truth; use reviewed, committed Prisma migrations for schema changes (`npm run db:migrate` locally, `prisma migrate deploy` in deployment).
 
@@ -22,7 +22,7 @@ The city is a string rather than a closed enum so additional Zambian cities can 
 
 - **PostgreSQL Session Persistence**: Sessions are stored in the PostgreSQL `"session"` table via `express-session` and `connect-pg-simple` (`apps/api/src/session.ts`), matching the `Session` model in `apps/api/prisma/schema.prisma`. `MemoryStore` is explicitly prohibited in `production`.
 - **Cookie Security & Fixation Defense**: Session cookies use `httpOnly: true`, `secure: true` in `production`, `sameSite: 'lax'` (configurable), and explicit `maxAge`. On login and registration, `req.session.regenerate()` rotates the session ID before binding `userId`, invalidating any pre-authentication session ID. Logout calls `req.session.destroy()` and clears the cookie.
-- **CSRF Defense-in-Depth**: State-changing requests (`POST`, `PUT`, `PATCH`, `DELETE`) enforce `Origin`/`Referer` allowlisting, reject `Sec-Fetch-Site: cross-site`, reject browser form content types (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`), and verify HMAC-SHA256 `X-CSRF-Token` headers using `crypto.timingSafeEqual`.
+- **CSRF Defense-in-Depth**: State-changing requests (`POST`, `PUT`, `PATCH`, `DELETE`) enforce `Origin`/`Referer` allowlisting, reject `Sec-Fetch-Site: cross-site`, reject browser form content types (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`), and **require** a valid HMAC-SHA256 `X-CSRF-Token` header verified with `crypto.timingSafeEqual`. A missing header returns `403 CSRF_MISSING`; a bad signature returns `403 CSRF_INVALID`. Anonymous tokens (issued before login/registration) are accepted only while the request has no session-bound CSRF secret, so an anonymous token cannot authorise an authenticated session. The token is derived from `SESSION_SECRET` and a per-session secret, never stored in JavaScript-readable storage, and is not a session identifier.
 - **Server-Derived Identity & Ownership**: The API resolves `req.user` strictly from `req.session.userId` against the database on every request and verifies that the account is `ACTIVE`. Client-submitted `userId`, `ownerId`, `role`, or `status` fields are never trusted. Every business-owner query and mutation scopes by `ownerScope(req.user)` (`{ ownerId: req.user.id }`).
 
 ## Booking consistency (future phase)

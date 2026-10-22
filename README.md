@@ -56,13 +56,15 @@ Prerequisites: 64-bit Windows 11, Git, Node.js 20+ (Node 22 was used for verific
    [Convert]::ToBase64String($bytes)
    ```
    Paste the output as the quoted `SESSION_SECRET` value in `.env`. Keep `.env` local; `.gitignore` excludes `.env` and `.env.*` while allowing `.env.example`. Never paste real credentials into source files or commit them.
-5. With the terminal still at the repository root, run the checks and initialize the database from the Prisma schema:
+
+   Keep the API and the Vite dev proxy on the same port. `PORT` in the root `.env` is read by both: the API listens on it, and the Vite `/api` proxy targets `http://127.0.0.1:$PORT` (`VITE_API_PROXY_TARGET` overrides the proxy target for a non-default host). Do not hardcode a port in `apps/web/vite.config.ts`. The API loads `apps/api/.env` first and then the repository-root `.env`, so `npm run dev` (which runs each workspace script with the workspace as its working directory) picks up the same configuration as a terminal started at the repository root.
+5. With the terminal still at the repository root, validate and generate the Prisma client, then apply the committed migrations:
    ```powershell
    npm run db:validate
    npm run db:generate
-   npm run db:migrate -- --name init
+   npm run db:deploy
    ```
-   Expected: validation says the schema is valid; generation reports a Prisma Client generated using the installed Prisma version; `migrate dev` creates a timestamped migration under `apps/api/prisma/migrations/`, applies it, and updates `_prisma_migrations`. The last command creates a **generated** development migration and applies it to the local database. Inspect `apps/api/prisma/migrations/` before committing; do not hand-write migration SQL to bypass Prisma. `npm run db:deploy` applies already-generated migrations in a deployment environment; it does not create migrations.
+   Expected: validation says the schema is valid; generation reports a Prisma Client generated using the installed Prisma version; `migrate deploy` applies the committed migrations under `apps/api/prisma/migrations/` (`init` and `auth_and_sessions`) and updates `_prisma_migrations`. Use `npm run db:migrate -- --name <name>` only when you intentionally change `apps/api/prisma/schema.prisma` and need a new migration generated; it applies migrations too. Inspect `apps/api/prisma/migrations/` before committing; do not hand-write migration SQL to bypass Prisma.
 6. Confirm migration state and inspect tables:
    ```powershell
    npm run db:status
@@ -77,11 +79,17 @@ Prerequisites: 64-bit Windows 11, Git, Node.js 20+ (Node 22 was used for verific
    npm run typecheck
    npm run build
    ```
-   Web: http://localhost:5173 · API liveness: http://localhost:4000/api/health.
+   Web: http://localhost:5173 · API liveness: `http://localhost:$PORT/api/health` (`PORT` from `.env`, default `4000`).
+
+   The web app talks to the API through the Vite `/api` proxy. Checking `http://localhost:4000/api/health` directly only proves the API process is alive; `http://localhost:5173/api/health` proves the browser path works too. If only the direct URL works, `PORT` and the proxy target disagree. The UI now reports this explicitly (for example `The ORQELI API returned an unexpected response (HTTP 500)`).
 
 ### Prisma download/TLS troubleshooting
 
 A previous schema-engine attempt failed exactly with: `request to https://binaries.prisma.sh/all_commits/c2990dca591cba766e3b7ef5d9e8a84796e47ab7/debian-openssl-3.0.x/schema-engine.gz.sha256 failed, reason: Client network socket disconnected before secure TLS connection was established`. This is an engine-download/network problem, **not evidence of a schema error**. First check system date/time, internet connectivity, VPN/proxy/firewall settings, and whether HTTPS to `binaries.prisma.sh` is permitted. Retry `npm run db:validate`; Prisma's `prisma version` or `prisma debug` can help report the platform/engine resolution. On a managed network, ask IT to allow the Prisma engine host or configure the organization's trusted HTTPS proxy correctly. Do not disable TLS verification, use insecure HTTP, download a random engine binary, or fabricate migration SQL. Once access is restored, rerun the commands in step 5 and retain the actual command output.
+
+### "The request could not be completed." / HTTP 500 when registering
+
+That message is the UI fallback for a non-JSON response. In development the usual cause is that the browser request went through the Vite proxy but the API was not reachable on the proxied port, so Vite answered `500 text/plain` (Vite logs `http proxy error ... ECONNREFUSED`). Check in this order: `npm run db:generate` has been run (the API exits on start if the Prisma client is not generated); the API terminal shows `ORQELI API listening on <port>`; that port equals `PORT` in the root `.env`; and `http://localhost:5173/api/health` returns `{"status":"ok"}`. The proxy now derives its target from `PORT`, so a stale hardcoded port cannot desynchronise it.
 
 `/api/health` is a process/liveness check and intentionally does not verify PostgreSQL. The API creates the Prisma client lazily and does not connect on startup; missing required environment values fail fast. There are not yet database-backed application routes, so DB outage handling for such routes is not implemented.
 
@@ -91,7 +99,7 @@ A previous schema-engine attempt failed exactly with: `request to https://binari
 - `GET /api/health` — Process liveness check (`{ "status": "ok" }`).
 
 ### Authentication & Session Management
-- `GET /api/auth/csrf` — Returns a signed CSRF token (`{ "csrfToken": "..." }`).
+- `GET /api/auth/csrf` — Returns a signed CSRF token (`{ "csrfToken": "..." }`). Every state-changing request (`POST`, `PUT`, `PATCH`, `DELETE`) must send it back in the `X-CSRF-Token` header; a missing token is rejected with `403 CSRF_MISSING` and an invalid/expired one with `403 CSRF_INVALID`. The token is bound to the current session once authenticated, so `curl`/script clients must fetch a token with the same cookie they use for the mutation.
 - `POST /api/auth/register` — Registers a `CUSTOMER` or `BUSINESS_OWNER` (with initial `PENDING` business profile). Prohibits `ADMIN` registration (`403 FORBIDDEN`), normalizes emails, hashes passwords with Argon2id, regenerates the session ID, and returns `201` with `{ user, csrfToken }`.
 - `POST /api/auth/login` — Authenticates email and password using Argon2, rejects `DISABLED` or `SUSPENDED` accounts (`403`), regenerates the session ID to prevent session fixation, and returns `200` with `{ user, csrfToken }`.
 - `POST /api/auth/logout` — Destroys the server-side PostgreSQL session, clears the session cookie, and returns `200` with `{ "status": "ok" }`.
