@@ -83,6 +83,12 @@ Prerequisites: 64-bit Windows 11, Git, Node.js 20+ (Node 22 was used for verific
 
    The web app talks to the API through the Vite `/api` proxy. Checking `http://localhost:4000/api/health` directly only proves the API process is alive; `http://localhost:5173/api/health` proves the browser path works too. If only the direct URL works, `PORT` and the proxy target disagree. The UI now reports this explicitly (for example `The ORQELI API returned an unexpected response (HTTP 500)`).
 
+   `npm test` runs both suites (API and web) and needs no database. To exercise the real PostgreSQL code paths (registration, login, logout, roles, CSRF, and the `session` table written by `connect-pg-simple`), run the migration-backed flow check after `npm run db:deploy`; it creates and then deletes its own test rows:
+   ```powershell
+   npm run db:verify-flow -w @orqeli/api
+   ```
+   `.github/workflows/ci.yml` runs the same steps — install, `db:validate`, `db:generate`, typecheck, `db:deploy`, `prisma migrate diff` drift check, tests, the flow check and the production build — against an ephemeral PostgreSQL 16 service on every push and pull request, so these checks do not depend on a local database.
+
 ### Prisma download/TLS troubleshooting
 
 A previous schema-engine attempt failed exactly with: `request to https://binaries.prisma.sh/all_commits/c2990dca591cba766e3b7ef5d9e8a84796e47ab7/debian-openssl-3.0.x/schema-engine.gz.sha256 failed, reason: Client network socket disconnected before secure TLS connection was established`. This is an engine-download/network problem, **not evidence of a schema error**. First check system date/time, internet connectivity, VPN/proxy/firewall settings, and whether HTTPS to `binaries.prisma.sh` is permitted. Retry `npm run db:validate`; Prisma's `prisma version` or `prisma debug` can help report the platform/engine resolution. On a managed network, ask IT to allow the Prisma engine host or configure the organization's trusted HTTPS proxy correctly. Do not disable TLS verification, use insecure HTTP, download a random engine binary, or fabricate migration SQL. Once access is restored, rerun the commands in step 5 and retain the actual command output.
@@ -91,7 +97,7 @@ A previous schema-engine attempt failed exactly with: `request to https://binari
 
 That message is the UI fallback for a non-JSON response. In development the usual cause is that the browser request went through the Vite proxy but the API was not reachable on the proxied port, so Vite answered `500 text/plain` (Vite logs `http proxy error ... ECONNREFUSED`). Check in this order: `npm run db:generate` has been run (the API exits on start if the Prisma client is not generated); the API terminal shows `ORQELI API listening on <port>`; that port equals `PORT` in the root `.env`; and `http://localhost:5173/api/health` returns `{"status":"ok"}`. The proxy now derives its target from `PORT`, so a stale hardcoded port cannot desynchronise it.
 
-`/api/health` is a process/liveness check and intentionally does not verify PostgreSQL. The API creates the Prisma client lazily and does not connect on startup; missing required environment values fail fast. There are not yet database-backed application routes, so DB outage handling for such routes is not implemented.
+`/api/health` is a process/liveness check and intentionally does not verify PostgreSQL. The API creates the Prisma client lazily and does not connect on startup; missing required environment values fail fast. Database-backed routes currently surface connection failures as a generic `500 INTERNAL_ERROR` (the details are logged server-side, not returned).
 
 ## API Endpoints
 
