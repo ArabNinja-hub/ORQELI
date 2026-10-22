@@ -1,0 +1,123 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CUSTOMER
+  BUSINESS_OWNER
+  ADMIN
+}
+
+enum BusinessStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+model User {
+  id               String       @id @default(cuid())
+  email            String?      @unique
+  phone            String?      @unique
+  name             String
+  passwordHash     String?
+  role             UserRole     @default(CUSTOMER)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  ownedBusinesses  Business[]   @relation("BusinessOwner")
+  bookings         Booking[]    @relation("CustomerBookings")
+  auditEvents      AuditEvent[] @relation("ActorEvents")
+}
+
+model Business {
+  id              String         @id @default(cuid())
+  ownerId         String
+  owner           User           @relation("BusinessOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  name            String
+  description     String?
+  city            String
+  location        String
+  phone           String
+  email           String?
+  status          BusinessStatus @default(PENDING)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  services        Service[]
+  workingHours    WorkingHour[]
+  bookings        Booking[]
+  @@index([city, status])
+  @@index([ownerId])
+}
+
+model Service {
+  id              String      @id @default(cuid())
+  businessId      String
+  business        Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name            String
+  description     String?
+  durationMinutes Int
+  priceMinorUnits Int?
+  currency        String      @default("ZMW")
+  active          Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  bookings        Booking[]
+  @@index([businessId, active])
+}
+
+model WorkingHour {
+  id          String   @id @default(cuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  weekday     Int
+  opensAt     String
+  closesAt    String
+  closed      Boolean  @default(false)
+  @@unique([businessId, weekday])
+}
+
+model Booking {
+  id              String        @id @default(cuid())
+  reference       String        @unique @default(cuid())
+  businessId      String
+  business        Business      @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  serviceId       String
+  service         Service       @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  customerUserId  String?
+  customer        User?         @relation("CustomerBookings", fields: [customerUserId], references: [id], onDelete: SetNull)
+  customerName    String
+  customerPhone   String
+  customerEmail   String?
+  startsAt        DateTime      @db.Timestamptz(3)
+  endsAt          DateTime      @db.Timestamptz(3)
+  status          BookingStatus @default(PENDING)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  @@index([businessId, startsAt, endsAt])
+  @@index([customerUserId, startsAt])
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  actorId     String?
+  actor       User?    @relation("ActorEvents", fields: [actorId], references: [id], onDelete: SetNull)
+  action      String
+  entityType  String
+  entityId    String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+}
