@@ -16,9 +16,14 @@
 
 The city is a string rather than a closed enum so additional Zambian cities can be added without schema changes. Business list queries must include `status: APPROVED`; pending/rejected/suspended listings are not public and cannot accept bookings. Approval changes belong only to trusted administrator endpoints and should create audit events. The API currently has no business or booking endpoints.
 
-## Authorization/security plan
+## Authorization/security architecture
 
-`requireRole` and `ownerScope` in `apps/api/src/authz.ts` are reusable foundations, not a complete identity system. Authentication and session persistence are not yet implemented; until they are, privileged routes must not be added. Future sessions should use secure, HttpOnly, SameSite cookies, CSRF protections where applicable, session rotation/revocation, and server-side identity resolution. Do not accept role, owner ID, or approval status as trusted client inputs. Every owner query/mutation must scope through the authenticated owner's ID and return no cross-tenant records. Admin access requires a server-verified ADMIN role. Validate and normalize all untrusted inputs at API boundaries.
+`requireAuth`, `requireRole`, and `ownerScope` in `apps/api/src/authz.ts` enforce role-based access control and tenant isolation:
+
+- **PostgreSQL Session Persistence**: Sessions are stored in the PostgreSQL `"session"` table via `express-session` and `connect-pg-simple` (`apps/api/src/session.ts`), matching the `Session` model in `apps/api/prisma/schema.prisma`. `MemoryStore` is explicitly prohibited in `production`.
+- **Cookie Security & Fixation Defense**: Session cookies use `httpOnly: true`, `secure: true` in `production`, `sameSite: 'lax'` (configurable), and explicit `maxAge`. On login and registration, `req.session.regenerate()` rotates the session ID before binding `userId`, invalidating any pre-authentication session ID. Logout calls `req.session.destroy()` and clears the cookie.
+- **CSRF Defense-in-Depth**: State-changing requests (`POST`, `PUT`, `PATCH`, `DELETE`) enforce `Origin`/`Referer` allowlisting, reject `Sec-Fetch-Site: cross-site`, reject browser form content types (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`), and verify HMAC-SHA256 `X-CSRF-Token` headers using `crypto.timingSafeEqual`.
+- **Server-Derived Identity & Ownership**: The API resolves `req.user` strictly from `req.session.userId` against the database on every request and verifies that the account is `ACTIVE`. Client-submitted `userId`, `ownerId`, `role`, or `status` fields are never trusted. Every business-owner query and mutation scopes by `ownerScope(req.user)` (`{ ownerId: req.user.id }`).
 
 ## Booking consistency (future phase)
 

@@ -8,10 +8,10 @@ The original repository had only this README and no application framework, packa
 
 ## Requirements coverage and boundaries
 
-- Initial relational entities and roles are modeled: users, businesses, services, working hours, bookings, and administrator audit events.
+- Initial relational entities and roles are modeled: users (`CUSTOMER`, `BUSINESS_OWNER`, `ADMIN`), user account statuses (`ACTIVE`, `DISABLED`, `SUSPENDED`), businesses, services, working hours, bookings, administrator audit events, and PostgreSQL-backed sessions (`session`).
 - Business statuses are `PENDING`, `APPROVED`, `REJECTED`, and `SUSPENDED`; new records default to pending. Public discovery/booking access must filter for approved businesses.
 - Business records include city and location; city is free text for extensibility and indexed with status. Launch UI city choices are Kitwe and Ndola.
-- API authorization helpers define role checks and owner scope patterns, but no authentication/session provider or privileged endpoints are active. Frontend route placeholders are navigation, **not** access controls. Before adding protected operations, implement server-verified sessions, authorization, and owner-scoped queries on every request. Provision/admin role assignment must be a trusted server operation.
+- Server-verified session authentication (`express-session` + `connect-pg-simple`), Argon2id password hashing, CSRF protections, role-based access control (`requireRole`), and business-owner tenant isolation (`ownerScope`) are implemented across `/api/auth/*`, `/api/account`, `/api/owner/*`, and `/api/admin/*`. Public registration never permits creating `ADMIN` accounts, and newly registered business owners always create `PENDING` business listings subject to manual administrator review.
 - Booking data includes guest contact fields and a unique reference. Booking creation, availability calculation, transaction/concurrency protections, and confirmation are not implemented; the UI explicitly does not claim an appointment was made. For a real booking flow, revalidate approval, service duration, working hours and conflicts in a transaction. PostgreSQL exclusion constraints (with a range and `btree_gist`) are a recommended additional migration to prevent overlapping active appointments under concurrency.
 - Subscription, featured listing, payments, and commissions are intentionally out of scope.
 - API configuration is validated with Zod, response errors use a stable structure, and Helmet/CORS/request body limits are configured. Add request schemas and rate limiting before public mutation endpoints.
@@ -85,12 +85,39 @@ A previous schema-engine attempt failed exactly with: `request to https://binari
 
 `/api/health` is a process/liveness check and intentionally does not verify PostgreSQL. The API creates the Prisma client lazily and does not connect on startup; missing required environment values fail fast. There are not yet database-backed application routes, so DB outage handling for such routes is not implemented.
 
+## API Endpoints
+
+### Health
+- `GET /api/health` — Process liveness check (`{ "status": "ok" }`).
+
+### Authentication & Session Management
+- `GET /api/auth/csrf` — Returns a signed CSRF token (`{ "csrfToken": "..." }`).
+- `POST /api/auth/register` — Registers a `CUSTOMER` or `BUSINESS_OWNER` (with initial `PENDING` business profile). Prohibits `ADMIN` registration (`403 FORBIDDEN`), normalizes emails, hashes passwords with Argon2id, regenerates the session ID, and returns `201` with `{ user, csrfToken }`.
+- `POST /api/auth/login` — Authenticates email and password using Argon2, rejects `DISABLED` or `SUSPENDED` accounts (`403`), regenerates the session ID to prevent session fixation, and returns `200` with `{ user, csrfToken }`.
+- `POST /api/auth/logout` — Destroys the server-side PostgreSQL session, clears the session cookie, and returns `200` with `{ "status": "ok" }`.
+- `GET /api/auth/me` — Returns `200` with the authenticated user's safe profile (`{ user, csrfToken }`) or `401 UNAUTHENTICATED`.
+
+### Role-Protected & Owner-Scoped Endpoints
+- `GET /api/account` — Authenticated customer/user profile and account bookings (`CUSTOMER`, `BUSINESS_OWNER`, `ADMIN`).
+- `GET /api/owner/businesses` — Lists businesses owned by the authenticated `BUSINESS_OWNER` (scoped via `ownerScope`).
+- `POST /api/owner/businesses` — Submits a new business onboarding application (`status: PENDING`) for the authenticated `BUSINESS_OWNER`.
+- `GET /api/owner/businesses/:businessId` — Retrieves a business owned by the authenticated `BUSINESS_OWNER` (`404` if not owned).
+- `PATCH /api/owner/businesses/:businessId` — Updates allowed profile fields on a business owned by the authenticated `BUSINESS_OWNER` (rejects attempts to change `status` or `ownerId`).
+- `GET /api/admin/businesses` — Lists business applications for `ADMIN` review (optional `?status=` filter).
+- `PATCH /api/admin/businesses/:businessId/status` — Updates a business review status (`PENDING`, `APPROVED`, `REJECTED`, `SUSPENDED`) as `ADMIN` and records an `AuditEvent`.
+- `GET /api/admin/users` — Lists safe user profiles for `ADMIN` oversight (never exposes `passwordHash`).
+- `PATCH /api/admin/users/:userId/status` — Updates a user account status (`ACTIVE`, `DISABLED`, `SUSPENDED`) as `ADMIN` and records an `AuditEvent`.
+
 ## Environment variables
 
 | Name | Required | Description |
 |---|---:|---|
 | `DATABASE_URL` | yes | PostgreSQL URL, including database and schema |
-| `SESSION_SECRET` | yes | Placeholder for future server-side session signing; 32+ chars. No session implementation yet |
+| `SESSION_SECRET` | yes | Cryptographically strong secret for signing session cookies and CSRF tokens; 32+ chars |
 | `PORT` | no | API listen port; defaults to `4000` |
 | `WEB_ORIGIN` | no | CORS frontend origin; defaults to `http://localhost:5173` |
+| `SESSION_COOKIE_NAME` | no | Session cookie name; defaults to `orqeli.sid` |
+| `SESSION_TTL_HOURS` | no | Session lifetime in hours (`1`–`720`); defaults to `24` |
+| `SESSION_COOKIE_SAMESITE` | no | Cookie SameSite policy (`lax`, `strict`, `none`); defaults to `lax` |
+| `TRUST_PROXY` | no | Trust reverse proxy `X-Forwarded-Proto` header (`true`/`false`); defaults to `false` (enabled automatically in `production`) |
 | `NODE_ENV` | no | `development`, `test`, or `production`; defaults to `development` |
