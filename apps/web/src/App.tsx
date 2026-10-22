@@ -13,13 +13,12 @@ import {
   ArrowRight,
   CalendarDays,
   Check,
-  ChevronDown,
-  Clock3,
   LogIn,
   LogOut,
   MapPin,
   Menu,
   Play,
+  Pause,
   Plus,
   Scissors,
   ShieldCheck,
@@ -57,6 +56,11 @@ function ShellContent() {
   const navigate = useNavigate();
 
   const closeMenu = () => setMenuOpen(false);
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenuOpen(false); };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, []);
 
   const handleLogout = async () => {
     setLoggingOut(true);
@@ -71,15 +75,15 @@ function ShellContent() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <header className="topbar">
         <Link to="/" className="brand" onClick={closeMenu}>
-          <span className="brand-mark">
-            <Scissors size={19} />
-          </span>
-          orqeli<span className="brand-dot">.</span>
+          <img className="brand-logo" src="/assets/orqeli-brand.png" alt="ORQELI home" width="920" height="202" />
         </Link>
 
-        <nav className={menuOpen ? 'nav open' : 'nav'}>
+        <nav id="main-navigation" aria-label="Main navigation" className={menuOpen ? 'nav open' : 'nav'}>
+          <Link className="owner-link" to="/register?role=BUSINESS_OWNER" onClick={closeMenu}>List your business <ArrowRight size={14} /></Link>
+          <Link to="/discover" onClick={closeMenu}>Explore businesses</Link>
           <a href="/#how" onClick={closeMenu}>
             How it works
           </a>
@@ -97,11 +101,7 @@ function ShellContent() {
                 </Link>
               )}
             </>
-          ) : (
-            <Link to="/login" onClick={closeMenu}>
-              Sign in
-            </Link>
-          )}
+          ) : null}
         </nav>
 
         <div className="top-actions">
@@ -142,6 +142,8 @@ function ShellContent() {
           )}
           <button
             className="menu-toggle"
+            aria-controls="main-navigation"
+            aria-expanded={menuOpen}
             aria-label={menuOpen ? 'Close menu' : 'Open menu'}
             onClick={() => setMenuOpen(!menuOpen)}
           >
@@ -150,12 +152,13 @@ function ShellContent() {
         </div>
       </header>
 
-      <main>
+      <main id="main-content" tabIndex={-1}>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/account" element={<AccountPage />} />
+          <Route path="/discover" element={<DiscoverPage />} />
           <Route path="/business" element={<BusinessWorkspacePage />} />
           <Route path="/admin" element={<AdminWorkspacePage />} />
           <Route
@@ -175,10 +178,7 @@ function ShellContent() {
 
       <footer className="footer">
         <Link to="/" className="brand footer-brand">
-          <span className="brand-mark">
-            <Scissors size={16} />
-          </span>
-          orqeli<span className="brand-dot">.</span>
+          <img className="brand-logo" src="/assets/orqeli-brand.png" alt="ORQELI home" width="920" height="202" />
         </Link>
         <span>Local care, booked simply.</span>
         <div>
@@ -193,195 +193,86 @@ function ShellContent() {
 
 function Home() {
   const [city, setCity] = useState('Kitwe');
-  const [videoLoaded, setVideoLoaded] = useState(false);
+  const [motionAllowed, setMotionAllowed] = useState(false);
+  const [videoPaused, setVideoPaused] = useState(false);
   const navigate = useNavigate();
-  const prefersReducedMotion =
-    typeof window !== 'undefined' &&
-    window.matchMedia &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  const handleExplore = (event: React.FormEvent) => {
-    event.preventDefault();
-    navigate('/business');
-  };
+  useEffect(() => {
+    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setMotionAllowed(!preference.matches);
+    update();
+    preference.addEventListener('change', update);
+    return () => preference.removeEventListener('change', update);
+  }, []);
 
   return (
     <>
-      <section className="hero-video">
+      <section className="hero-video" aria-labelledby="hero-heading">
         <div className="hero-video-media" aria-hidden="true">
-          <div className="hero-video-poster" />
-          {!prefersReducedMotion && (
-            <video
-              className={videoLoaded ? 'is-loaded' : ''}
-              src="/assets/orqeli-hero.mp4"
-              autoPlay
-              loop
-              muted
-              playsInline
-              preload="auto"
-              onCanPlay={() => setVideoLoaded(true)}
-              onLoadedData={() => setVideoLoaded(true)}
-            />
+          {motionAllowed && !videoPaused && (
+            <video src="/assets/orqeli-hero.mp4" autoPlay loop muted playsInline preload="metadata" />
           )}
           <div className="hero-video-overlay" />
         </div>
-
         <div className="hero-video-content">
-          <img
-            className="hero-logo"
-            src="/assets/orqeli-logo.jpeg"
-            alt="ORQELI — Connecting Business. Creating Growth."
-            width="560"
-            height="306"
-            loading="eager"
-            decoding="async"
-          />
-
-          <div className="eyebrow hero-eyebrow">
-            <span className="eyebrow-line" /> COPPERBELT, ZAMBIA
-          </div>
-
-          <h1 className="hero-title">
-            Connecting Business.
-            <br />
-            <em>Creating Growth.</em>
-          </h1>
-
-          <p className="hero-lead">
-            Discover trusted local barbershops, salons and service businesses across
-            Kitwe and Ndola. Book instantly, support your community, and grow with
-            ORQELI — the marketplace made for your everyday.
-          </p>
-
-          <form className="hero-search" onSubmit={handleExplore}>
+          <div className="eyebrow hero-eyebrow">LOCAL SERVICES. A BETTER CONNECTION.</div>
+          <h1 id="hero-heading">Your next appointment.<br /><span>Closer to home.</span></h1>
+          <p className="hero-lead">A simpler way to discover barbershops, salons and local services. Starting with Kitwe and Ndola.</p>
+          <form className="hero-search" onSubmit={(event) => {
+            event.preventDefault();
+            navigate(`/discover?city=${encodeURIComponent(city)}`);
+          }}>
             <label className="city-field">
-              <MapPin size={18} />
-              <span className="field-copy">
-                <span className="field-label">YOUR CITY</span>
-                <select
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                  aria-label="Select city"
-                >
-                  <option>Kitwe</option>
-                  <option>Ndola</option>
+              <MapPin size={20} aria-hidden="true" />
+              <span className="field-copy"><span className="field-label">Explore your city</span>
+                <select value={city} onChange={(event) => setCity(event.target.value)}>
+                  <option>Kitwe</option><option>Ndola</option>
                 </select>
               </span>
-              <ChevronDown className="select-chevron" size={16} />
             </label>
-            <button className="search-button" type="submit">
-              Explore businesses <ArrowRight size={17} />
-            </button>
+            <button className="search-button" type="submit">Explore businesses <ArrowRight size={18} aria-hidden="true" /></button>
           </form>
-
-          <div className="hero-cta-row">
-            <Link to="/register?role=BUSINESS_OWNER" className="hero-cta-secondary">
-              <Play size={13} /> List your business
-            </Link>
-            <span className="availability-note hero-note">
-              <span className="note-dot" /> Local care, booked simply — starting in Kitwe &amp; Ndola
-            </span>
-          </div>
+          <p className="hero-note">Early access · Business discovery and online booking are in development.</p>
+        </div>
+        {motionAllowed && <button className="video-control" onClick={() => setVideoPaused(!videoPaused)} aria-pressed={videoPaused}>
+          {videoPaused ? <Play size={14} /> : <Pause size={14} />}{videoPaused ? 'Play background' : 'Pause background'}
+        </button>}
+      </section>
+      <section className="trust-strip" aria-label="Our focus">
+        <div><MapPin /><span><b>Starting locally</b><small>Kitwe & Ndola, Zambia</small></span></div>
+        <div><Store /><span><b>Built for everyday services</b><small>Barbershops, salons & more</small></span></div>
+        <div><CalendarDays /><span><b>Designed around your time</b><small>Online appointments are on the way</small></span></div>
+      </section>
+      <section className="journey" id="how" aria-labelledby="journey-heading">
+        <div className="section-heading">
+          <div><span className="eyebrow">THE ORQELI EXPERIENCE</span><h2 id="journey-heading">Find the right service.<br />Make time for yourself.</h2></div>
+          <p>Local discovery should be straightforward. We’re building one place to find services near you and plan your next visit.</p>
+        </div>
+        <div className="steps">
+          <article><span className="step-number">01 / DISCOVER</span><MapPin /><h3>Start in your city</h3><p>Find local businesses in Kitwe and Ndola, without searching all over the internet.</p></article>
+          <article><span className="step-number">02 / CHOOSE</span><Scissors /><h3>Find your kind of service</h3><p>Get to know a business and the services it offers before planning a visit.</p></article>
+          <article><span className="step-number">03 / BOOK</span><CalendarDays /><h3>Your time, well planned</h3><p>Online booking is coming in a future release. Appointments cannot be made on ORQELI yet.</p></article>
         </div>
       </section>
-
-      <section className="trust-strip">
-        <div>
-          <span className="strip-icon">
-            <MapPin size={19} />
-          </span>
-          <span>
-            <b>Rooted in Copperbelt</b>
-            <small>Starting with Kitwe &amp; Ndola</small>
-          </span>
-        </div>
-        <div>
-          <span className="strip-icon">
-            <CalendarDays size={19} />
-          </span>
-          <span>
-            <b>Booking, made simple</b>
-            <small>Your time, your choice</small>
-          </span>
-        </div>
-        <div>
-          <span className="strip-icon">
-            <Check size={19} />
-          </span>
-          <span>
-            <b>Local businesses first</b>
-            <small>Discover care close to you</small>
-          </span>
-        </div>
-      </section>
-
-      <section className="intro" id="how">
-        <div className="intro-heading">
-          <div className="eyebrow">
-            <span className="eyebrow-line" /> A BETTER WAY TO BOOK
-          </div>
-          <h2>
-            Your time is yours.
-            <br />
-            <em>Spend it well.</em>
-          </h2>
-        </div>
-        <div className="intro-copy">
-          <p>
-            Finding the right barber or salon shouldn't take all afternoon. ORQELI is
-            being built to make discovering local businesses and booking a little easier.
-          </p>
-          <Link className="text-link" to="/business">
-            Own a local business? <ArrowRight size={16} />
-          </Link>
-        </div>
-      </section>
-
-      <section className="steps">
-        <article>
-          <span className="step-number">01</span>
-          <div className="step-icon">
-            <MapPin />
-          </div>
-          <h3>Find your place</h3>
-          <p>Explore businesses in your city and see what feels right for you.</p>
-        </article>
-        <article>
-          <span className="step-number">02</span>
-          <div className="step-icon">
-            <Scissors />
-          </div>
-          <h3>Choose your service</h3>
-          <p>Get to know the services on offer, at a glance.</p>
-        </article>
-        <article>
-          <span className="step-number">03</span>
-          <div className="step-icon">
-            <Clock3 />
-          </div>
-          <h3>Make time for you</h3>
-          <p>Booking is on the way. We're laying the right foundations first.</p>
-        </article>
-      </section>
-
-      <section className="coming">
-        <div className="coming-icon">
-          <CalendarDays size={21} />
-        </div>
-        <div>
-          <span className="eyebrow">A LITTLE PATIENCE, A BETTER START</span>
-          <h2>We're getting the foundations right.</h2>
-          <p>
-            Business listings and online appointments are coming in a future release. No
-            pretend bookings—just a thoughtful start.
-          </p>
-        </div>
-        <Link to="/business" className="coming-link">
-          For local businesses <ArrowRight size={16} />
-        </Link>
+      <section className="coming" aria-labelledby="owner-heading">
+        <div><span className="eyebrow">FOR BUSINESS OWNERS</span><h2 id="owner-heading">Your business. A new way to be found.</h2><p>Bring your local business to ORQELI. Create an owner account and submit your business for review as we prepare to open discovery.</p></div>
+        <Link to="/register?role=BUSINESS_OWNER" className="primary-button">Register your business <ArrowRight size={18} /></Link>
       </section>
     </>
   );
+}
+
+function DiscoverPage() {
+  const [params, setParams] = useSearchParams();
+  const city = params.get('city') === 'Ndola' ? 'Ndola' : 'Kitwe';
+  return <section className="portal"><div className="portal-card workspace-card">
+    <span className="eyebrow">LOCAL BUSINESS DISCOVERY</span>
+    <h1>Explore {city}</h1>
+    <p>Discover local services, closer to home.</p>
+    <label className="form-field"><span>Your city</span><select value={city} onChange={(event) => setParams({ city: event.target.value })}><option>Kitwe</option><option>Ndola</option></select></label>
+    <div className="discovery-empty"><Store size={32} /><h2>We’re preparing local discovery.</h2><p>Public business listings are not available yet. We’re welcoming business applications in {city}; online bookings will follow in a future release.</p></div>
+    <div className="workspace-actions"><Link to="/register?role=BUSINESS_OWNER" className="primary-button">Register your business <ArrowRight size={16} /></Link><Link to="/" className="text-link">Back to home</Link></div>
+  </div></section>;
 }
 
 function Portal({
