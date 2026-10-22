@@ -129,9 +129,9 @@ That message is the UI fallback for a non-JSON response. In development the usua
 | `DATABASE_URL` | yes | PostgreSQL URL, including database and schema |
 | `SESSION_SECRET` | yes | Cryptographically strong secret for signing session cookies and CSRF tokens; 32+ chars |
 | `PORT` | no | API listen port; defaults to `4000` |
-| `WEB_ORIGIN` | no | CORS frontend origin; defaults to `http://localhost:5173` |
+| `WEB_ORIGIN` | no | Exact browser origin allowed by CORS and the CSRF origin check; defaults to `http://localhost:5173`. In production set it to the public HTTPS origin (for example `https://orqeli.zm`). |
 | `SESSION_COOKIE_NAME` | no | Session cookie name; defaults to `orqeli.sid` |
 | `SESSION_TTL_HOURS` | no | Session lifetime in hours (`1`–`720`); defaults to `24` |
-| `SESSION_COOKIE_SAMESITE` | no | Cookie SameSite policy (`lax`, `strict`, `none`); defaults to `lax` |
+| `SESSION_COOKIE_SAMESITE` | no | Cookie SameSite policy (`lax`, `strict`, `none`); defaults to `lax`. A cross-site deployment (web and API on different origins) needs `none`, which is only accepted when `NODE_ENV=production` so the `Secure` flag is guaranteed. |
 | `TRUST_PROXY` | no | Trust reverse proxy `X-Forwarded-Proto` header (`true`/`false`); defaults to `false` (enabled automatically in `production`) |
-| `NODE_ENV` | no | `development`, `test`, or `production`; defaults to `development` |
+| `NODE_ENV` | no | `development`, `test`, or `production`; defaults to `development`. `production` sets `Secure` session cookies (the site must be served over HTTPS, terminating TLS at a trusted proxy), refuses `MemoryStore`, rejects the example `SESSION_SECRET` placeholder, and enables `trust proxy`. |
