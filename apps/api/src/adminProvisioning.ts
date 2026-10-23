@@ -13,7 +13,8 @@ import { hashPassword } from './passwords.js';
 export type AdminProvisioningErrorCode =
   | 'INVALID_INPUT'
   | 'ACCOUNT_EXISTS'
-  | 'NOT_CONFIRMED';
+  | 'NOT_CONFIRMED'
+  | 'TARGET_MISMATCH';
 
 export class AdminProvisioningError extends Error {
   readonly code: AdminProvisioningErrorCode;
@@ -107,12 +108,14 @@ export interface AdminProvisioningArgs {
   email?: string;
   name?: string;
   phone?: string;
+  /** Exact credential-free description of the database the operator intends to write to. */
+  expectTarget?: string;
   passwordStdin: boolean;
   yes: boolean;
   help: boolean;
 }
 
-const VALUE_FLAGS = new Set(['--email', '--name', '--phone']);
+const VALUE_FLAGS = new Set(['--email', '--name', '--phone', '--expect-target']);
 const BOOLEAN_FLAGS = new Set(['--password-stdin', '--yes', '--help', '-h']);
 
 /**
@@ -162,6 +165,7 @@ export function parseAdminProvisioningArgs(argv: string[]): AdminProvisioningArg
       if (flag === '--email') args.email = value;
       if (flag === '--name') args.name = value;
       if (flag === '--phone') args.phone = value;
+      if (flag === '--expect-target') args.expectTarget = value;
       continue;
     }
 
@@ -196,5 +200,54 @@ export function describeDatabaseTarget(databaseUrl: string | undefined): string 
     return `${host}${port}/${database}${schema ? ` (schema ${schema})` : ''}`;
   } catch {
     return '(unparseable DATABASE_URL)';
+  }
+}
+
+/** Case/whitespace-insensitive comparison of two credential-free target descriptions. */
+export function databaseTargetMatches(expected: string, actual: string): boolean {
+  const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase();
+  return normalize(expected) === normalize(actual);
+}
+
+/**
+ * `--yes` must never be a way to skip target validation: it only removes the
+ * interactive prompt, not the requirement to name the database being written to.
+ * Without `--expect-target` a non-interactive run is refused outright, and with a
+ * mismatched value it is refused before any connection is opened.
+ */
+export function assertDatabaseTargetValidation(input: {
+  expectedTarget: string | undefined;
+  actualTarget: string;
+  nonInteractive: boolean;
+}): void {
+  if (input.expectedTarget !== undefined) {
+    if (!databaseTargetMatches(input.expectedTarget, input.actualTarget)) {
+      throw new AdminProvisioningError(
+        'TARGET_MISMATCH',
+        `Refusing to run: --expect-target "${input.expectedTarget.trim()}" does not match the ` +
+          `configured database "${input.actualTarget}". No connection was opened.`
+      );
+    }
+    return;
+  }
+
+  if (input.nonInteractive) {
+    throw new AdminProvisioningError(
+      'INVALID_INPUT',
+      '--yes requires --expect-target "<target>" copied exactly from the "Target database:" line. ' +
+        'The flag removes the interactive prompt, never the target check. No connection was opened.'
+    );
+  }
+}
+
+/** The bare database name, used for the interactive confirmation prompt. */
+export function describeDatabaseName(databaseUrl: string | undefined): string {
+  if (!databaseUrl) {
+    return '';
+  }
+  try {
+    return new URL(databaseUrl).pathname.replace(/^\//, '');
+  } catch {
+    return '';
   }
 }

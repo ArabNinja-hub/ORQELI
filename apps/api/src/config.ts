@@ -43,6 +43,16 @@ export const envSchema = z
       .default('orqeli.sid'),
     SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(24),
     SESSION_COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).default('lax'),
+    /**
+     * Whether the password-reset endpoints are servable.
+     *
+     * Defaults to "disabled" because this repository ships no e-mail/SMS provider:
+     * a token that cannot be delivered must never be reported as a successful
+     * recovery. A deployment that injects a real `PasswordResetDelivery`
+     * implementation must set this to "enabled" explicitly; doing so without a
+     * delivery configured fails at startup instead of silently discarding tokens.
+     */
+    PASSWORD_RESET_MODE: z.enum(['enabled', 'disabled']).default('disabled'),
     TRUST_PROXY: z
       .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
       .default(false)

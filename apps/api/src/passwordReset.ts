@@ -30,9 +30,9 @@ export function isPasswordResetTokenFormat(value: unknown): value is string {
 
 /**
  * Delivery seam. The repository has no e-mail provider, credentials or template
- * infrastructure, so the default implementation intentionally does nothing.
- * A deployment must inject a real implementation (SMTP/API provider) and must
- * never write the token to application logs.
+ * infrastructure, so there is deliberately no default implementation: injecting
+ * one is what enables recovery (`PASSWORD_RESET_MODE=enabled`). An implementation
+ * must never write the token to application logs.
  */
 export interface PasswordResetDelivery {
   sendPasswordReset(input: {
@@ -43,12 +43,6 @@ export interface PasswordResetDelivery {
     expiresAt: Date;
   }): Promise<void>;
 }
-
-export const noopPasswordResetDelivery: PasswordResetDelivery = {
-  async sendPasswordReset() {
-    // Intentionally empty: no e-mail infrastructure is configured in this repository.
-  }
-};
 
 /** One-way pseudonym for an e-mail address, used in audit metadata instead of PII. */
 export function deriveEmailPseudonym(secret: string, email: string): string {

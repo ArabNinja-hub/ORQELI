@@ -38,7 +38,14 @@ test('environment schema rejects missing secrets and invalid values', () => {
 test('health endpoint responds without attempting database access', async () => {
   const response = await fetch(`${baseUrl}/api/health`);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: 'ok' });
+  const body = (await response.json()) as { status: string; passwordReset: string };
+  assert.equal(body.status, 'ok');
+  // The recovery state is reported explicitly so an operator can alert on it; the
+  // liveness probe itself must never touch the database (readiness does that).
+  assert.ok(
+    body.passwordReset === 'enabled' || body.passwordReset === 'disabled',
+    `unexpected passwordReset state: ${body.passwordReset}`
+  );
 });
 
 test('malformed JSON gets a safe client error response', async () => {

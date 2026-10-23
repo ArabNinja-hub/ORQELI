@@ -189,11 +189,34 @@ export function createSessionMiddleware(
   });
 }
 
+/**
+ * express-session sets `req.session` to null after `destroy()`. Any handler that
+ * runs later in the same request (login and registration both regenerate the
+ * session) would then throw a TypeError and answer 500. Re-attach an empty,
+ * unsaved session object so the request chain always has a usable session.
+ *
+ * `Store.prototype.generate` only builds the object in memory and assigns
+ * `req.session`; nothing is persisted unless a handler modifies and saves it, so
+ * this does not resurrect the destroyed session or re-issue its identifier.
+ */
+export function ensureSessionObject(req: Request): void {
+  if (req.session) {
+    return;
+  }
+  const store = req.sessionStore;
+  if (store && typeof store.generate === 'function') {
+    store.generate(req);
+    return;
+  }
+  throw new Error('Cannot re-initialise the session store after destroy.');
+}
+
 export async function regenerateAuthenticatedSession(
   req: Request,
   userId: string,
   sessionVersion: number
 ): Promise<string> {
+  ensureSessionObject(req);
   await new Promise<void>((resolve, reject) => {
     req.session.regenerate((err) => {
       if (err) {
@@ -247,4 +270,9 @@ export async function destroyAuthenticatedSession(
     sameSite: cookieOptions.sameSite,
     path: cookieOptions.path
   });
+
+  // Never leave `req.session` undefined: request-scoped middleware that runs
+  // after this call (for example the login handler) must still be able to create
+  // a session, and a destroyed session must never be resurrected for the caller.
+  ensureSessionObject(req);
 }

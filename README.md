@@ -88,7 +88,12 @@ Prerequisites: 64-bit Windows 11, Git, Node.js 20+ (Node 22 was used for verific
    ```powershell
    npm run db:verify-flow -w @orqeli/api
    ```
-   `.github/workflows/ci.yml` runs the same steps — install, `db:validate`, `db:generate`, typecheck, `db:deploy`, `prisma migrate diff` drift check, tests, the flow check and the production build — against an ephemeral PostgreSQL 16 service on every push and pull request, so these checks do not depend on a local database.
+   Password reset, password change, session invalidation and the reset-token concurrency guarantees are covered the same way by a script that runs the real `PrismaDataRepository` against PostgreSQL (including parallel issuance and parallel consumption):
+   ```powershell
+   npm run db:test-client -w @orqeli/api      # generates a disposable driver-adapter client
+   npm run db:verify-security -w @orqeli/api
+   ```
+   `.github/workflows/ci.yml` runs the same steps — install, `db:validate`, `db:generate`, typecheck, `db:deploy`, `prisma migrate diff` drift check, tests, the flow check, the account-security check and the production build — against an ephemeral PostgreSQL 16 service on every push and pull request, so these checks do not depend on a local database.
 
 ### Prisma download/TLS troubleshooting
 
@@ -96,14 +101,15 @@ A previous schema-engine attempt failed exactly with: `request to https://binari
 
 ### "The request could not be completed." / HTTP 500 when registering
 
-That message is the UI fallback for a non-JSON response. In development the usual cause is that the browser request went through the Vite proxy but the API was not reachable on the proxied port, so Vite answered `500 text/plain` (Vite logs `http proxy error ... ECONNREFUSED`). Check in this order: `npm run db:generate` has been run (the API exits on start if the Prisma client is not generated); the API terminal shows `ORQELI API listening on <port>`; that port equals `PORT` in the root `.env`; and `http://localhost:5173/api/health` returns `{"status":"ok"}`. The proxy now derives its target from `PORT`, so a stale hardcoded port cannot desynchronise it.
+That message is the UI fallback for a non-JSON response. In development the usual cause is that the browser request went through the Vite proxy but the API was not reachable on the proxied port, so Vite answered `500 text/plain` (Vite logs `http proxy error ... ECONNREFUSED`). Check in this order: `npm run db:generate` has been run (the API exits on start if the Prisma client is not generated); the API terminal shows `ORQELI API listening on <port>`; that port equals `PORT` in the root `.env`; and `http://localhost:5173/api/health` returns `"status":"ok"`. The proxy now derives its target from `PORT`, so a stale hardcoded port cannot desynchronise it.
 
-`/api/health` is a process/liveness check and intentionally does not verify PostgreSQL. The API creates the Prisma client lazily and does not connect on startup; missing required environment values fail fast. Database-backed routes currently surface connection failures as a generic `500 INTERNAL_ERROR` (the details are logged server-side, not returned).
+`/api/health` is a process/liveness check and intentionally does not verify PostgreSQL; `/api/health/ready` performs the database check. The API creates the Prisma client lazily and does not connect on startup; missing required environment values fail fast. Database-backed routes currently surface connection failures as a generic `500 INTERNAL_ERROR` (the details are logged server-side, not returned).
 
 ## API Endpoints
 
 ### Health
-- `GET /api/health` — Process liveness check (`{ "status": "ok" }`).
+- `GET /api/health` — Process liveness check: `{ "status": "ok", "passwordReset": "enabled" | "disabled" }`. Never touches the database.
+- `GET /api/health/ready` — Readiness check: `{ "status": "ready", "checks": { "database": "ok", "passwordReset": ... } }`, or `503` with `database: "unavailable"` when the repository cannot be reached.
 
 ### Authentication & Session Management
 - `GET /api/auth/csrf` — Returns a signed CSRF token (`{ "csrfToken": "..." }`). Every state-changing request (`POST`, `PUT`, `PATCH`, `DELETE`) must send it back in the `X-CSRF-Token` header; a missing token is rejected with `403 CSRF_MISSING` and an invalid/expired one with `403 CSRF_INVALID`. The token is bound to the current session once authenticated, so `curl`/script clients must fetch a token with the same cookie they use for the mutation.
@@ -111,8 +117,8 @@ That message is the UI fallback for a non-JSON response. In development the usua
 - `POST /api/auth/login` — Authenticates email and password using Argon2, rejects `DISABLED` or `SUSPENDED` accounts (`403`), regenerates the session ID to prevent session fixation, and returns `200` with `{ user, csrfToken }`. Repeated attempts are rate limited per client IP and per IP+email (`429 RATE_LIMITED` with `Retry-After`).
 - `POST /api/auth/logout` — Destroys the server-side PostgreSQL session, clears the session cookie, and returns `200` with `{ "status": "ok" }`.
 - `GET /api/auth/me` — Returns `200` with the authenticated user's safe profile (`{ user, csrfToken }`) or `401 UNAUTHENTICATED`.
-- `POST /api/auth/password-reset/request` — `{ email }`. Always returns `200 { "status": "ok" }`, whether or not the account exists. For an eligible account it creates a single-use token (only its SHA-256 hash is stored, 30-minute expiry) and hands it to the configured delivery implementation. **No delivery provider is configured in this repository**, so the default implementation discards the token; see the deployment checklist. Rate limited per IP.
-- `POST /api/auth/password-reset/confirm` — `{ token, password }`. Consumes the token exactly once, re-hashes the password with Argon2id, invalidates every existing session for the account, and returns `200 { "status": "ok" }`. Unknown, expired, superseded and already-used tokens all return the same `400 INVALID_RESET_TOKEN`. Requires a CSRF token; rate limited per IP.
+- `POST /api/auth/password-reset/request` — `{ email }`. Returns `200 { "status": "ok" }` for every address (existing, unknown or ineligible) when recovery is available. For an eligible account it creates a single-use token (only its SHA-256 hash is stored, 30-minute expiry) and hands it to the configured delivery implementation. **No delivery provider exists in this repository**, so recovery ships disabled (`PASSWORD_RESET_MODE=disabled`) and both reset endpoints answer `503 PASSWORD_RESET_UNAVAILABLE` rather than pretending a token was sent. Enabling the mode without a delivery implementation aborts startup in production. Rate limited per IP.
+- `POST /api/auth/password-reset/confirm` — `{ token, password }`. Consumes the token exactly once, re-hashes the password with Argon2id, invalidates every existing session for the account, and returns `200 { "status": "ok" }`. Unknown, expired, superseded and already-used tokens all return the same `400 INVALID_RESET_TOKEN`; `503 PASSWORD_RESET_UNAVAILABLE` while recovery is disabled. Requires a CSRF token; rate limited per IP.
 - `POST /api/auth/password/change` — Authenticated. `{ currentPassword, newPassword }`. Verifies the current password, updates the hash, invalidates every other session, rotates the caller's session ID and returns `200 { status, csrfToken }`. Requires a CSRF token; rate limited per account.
 
 ### Role-Protected & Owner-Scoped Endpoints
@@ -132,13 +138,18 @@ There is no HTTP endpoint that can create or promote an administrator. Provision
 administrator deliberately from a trusted machine with production database credentials:
 
 ```bash
-npm run admin:create -- --email <address> --name "<full name>" --password-stdin
+npm run admin:create -- --email <address> --name "<full name>" \
+  --expect-target "<host:port/database (schema public)>" --password-stdin
 ```
 
-The password is read from stdin or a hidden interactive prompt (never an argument), `--yes`
-or typing the e-mail address confirms the action, existing accounts are never promoted, and an
-`ADMIN_PROVISIONED` audit event is written with `actorId: null` and `metadata.source = "cli"`.
-The command is not run by CI (CI only executes `--help` as a smoke test).
+The first line printed is `Target database: …` (host/database/schema only, never
+credentials). That exact value must be repeated in `--expect-target` for a non-interactive run;
+`--yes` removes the prompt but never the target check, so a wrong `DATABASE_URL` cannot be
+provisioned silently. Interactive runs ask the operator to type the database name. The password
+is read from stdin or a hidden prompt (never an argument), existing accounts are never promoted,
+and an `ADMIN_PROVISIONED` audit event is written with `actorId: null` and
+`metadata.source = "cli"`. The command is not run by CI (CI only executes `--help` as a smoke
+test).
 
 ## Environment variables
 
@@ -152,6 +163,7 @@ The command is not run by CI (CI only executes `--help` as a smoke test).
 | `SESSION_TTL_HOURS` | no | Session lifetime in hours (`1`–`720`); defaults to `24` |
 | `SESSION_COOKIE_SAMESITE` | no | Cookie SameSite policy (`lax`, `strict`, `none`); defaults to `lax`. A cross-site deployment (web and API on different origins) needs `none`, which is only accepted when `NODE_ENV=production` so the `Secure` flag is guaranteed. |
 | `TRUST_PROXY` | no | Trust reverse proxy `X-Forwarded-Proto` header (`true`/`false`); defaults to `false` (enabled automatically in `production`) |
+| `PASSWORD_RESET_MODE` | no | `enabled` or `disabled`; defaults to `disabled`, which makes `/api/auth/password-reset/*` answer `503 PASSWORD_RESET_UNAVAILABLE`. Set to `enabled` only after injecting a `PasswordResetDelivery`; enabling it without one aborts startup in `production`. |
 | `NODE_ENV` | no | `development`, `test`, or `production`; defaults to `development`. `production` sets `Secure` session cookies (the site must be served over HTTPS, terminating TLS at a trusted proxy), refuses `MemoryStore`, rejects the example `SESSION_SECRET` placeholder, and enables `trust proxy`. |
 
 ## Public business discovery

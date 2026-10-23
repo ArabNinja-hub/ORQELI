@@ -7,6 +7,9 @@ dist/
 *.tsbuildinfo
 .DS_Store
 
+# Test-only Prisma client generated for PostgreSQL verification scripts
+apps/api/.prisma-test-client/
+
 # Browser test output
 test-results/
 playwright-report/

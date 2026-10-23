@@ -122,6 +122,12 @@ jobs:
       - name: Verify registration and session flows against PostgreSQL
         run: npm run db:verify-flow -w @orqeli/api
 
+      - name: Generate PostgreSQL driver-adapter test client
+        run: npm run db:test-client -w @orqeli/api
+
+      - name: Verify account security against PostgreSQL (Prisma repository, concurrency)
+        run: npm run db:verify-security -w @orqeli/api
+
       - name: Verify discovery against PostgreSQL (Kitwe/Ndola, approval, pagination, privacy)
         run: |
           set -o pipefail

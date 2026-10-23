@@ -25,7 +25,6 @@ import {
   generatePasswordResetToken,
   hashPasswordResetToken,
   isPasswordResetTokenFormat,
-  noopPasswordResetDelivery,
   type PasswordResetDelivery
 } from './passwordReset.js';
 import { createCsrfProtectionMiddleware, createCsrfToken } from './csrf.js';
@@ -109,6 +108,13 @@ export interface CreateAppOptions {
   passwordResetDelivery?: PasswordResetDelivery;
   /** Overrides the reset-token lifetime (primarily for tests). */
   passwordResetTokenTtlMs?: number;
+  /**
+   * Minimum interval between opportunistic expired-token cleanups. Set to 0 in
+   * tests to make the cleanup observable on every request.
+   */
+  passwordResetTokenPruneIntervalMs?: number;
+  /** Upper bound on rows deleted per cleanup run (keeps the statement bounded). */
+  passwordResetTokenPruneLimit?: number;
 }
 
 export function createApp(options: CreateAppOptions = {}) {
@@ -124,6 +130,42 @@ export function createApp(options: CreateAppOptions = {}) {
     (config.NODE_ENV === 'test'
       ? createPgSessionStore(config, { pool: createSimulatedPgPool() })
       : createPgSessionStore(config));
+
+  // Password recovery is only servable when a delivery implementation exists AND
+  // the deployment opted in explicitly. Without both, the endpoints answer 503
+  // instead of returning "ok" for a token that can never reach the account owner.
+  const passwordResetDelivery = options.passwordResetDelivery;
+  const passwordResetRequested = config.PASSWORD_RESET_MODE === 'enabled';
+
+  if (passwordResetRequested && !passwordResetDelivery) {
+    // Configuration validation: refusing to boot is the only safe production
+    // answer, because the alternative is accepting reset requests whose tokens are
+    // discarded. Outside production the process still starts (so tooling and tests
+    // keep working) but recovery stays unavailable rather than pretending.
+    if (config.NODE_ENV === 'production') {
+      throw new Error(
+        'PASSWORD_RESET_MODE="enabled" requires a configured PasswordResetDelivery implementation. ' +
+          'No delivery provider exists in this repository, so password reset cannot be enabled safely. ' +
+          'See docs/deployment-checklist.md.'
+      );
+    }
+    console.warn(
+      'PASSWORD_RESET_MODE="enabled" but no PasswordResetDelivery is configured; ' +
+        'password recovery stays unavailable (503).'
+    );
+  }
+
+  const passwordResetEnabled = passwordResetRequested && passwordResetDelivery !== undefined;
+  if (!passwordResetEnabled && config.NODE_ENV === 'production') {
+    console.warn(
+      'Password recovery is disabled (PASSWORD_RESET_MODE="disabled"): /api/auth/password-reset/* ' +
+        'answers 503 PASSWORD_RESET_UNAVAILABLE and no tokens are issued. Configure a delivery ' +
+        'provider before launch. See docs/deployment-checklist.md.'
+    );
+  }
+  if (passwordResetEnabled && passwordResetDelivery && config.NODE_ENV === 'production') {
+    console.info('Password recovery is enabled.');
+  }
 
   const instance = express();
   instance.disable('x-powered-by');
@@ -151,7 +193,35 @@ export function createApp(options: CreateAppOptions = {}) {
   );
   instance.use(express.json({ limit: '32kb' }));
 
-  instance.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
+  // Liveness: process is up. Never touches the database.
+  instance.get('/api/health', (_req, res) =>
+    res.json({
+      status: 'ok',
+      passwordReset: passwordResetEnabled ? 'enabled' : 'disabled'
+    })
+  );
+
+  // Readiness: dependencies required to serve the API are actually usable.
+  // Password recovery is reported explicitly but is intentionally not a hard gate
+  // (the rest of the API still works); deployments must alert on "disabled".
+  instance.get('/api/health/ready', async (_req, res) => {
+    const checks: Record<string, string> = {
+      passwordReset: passwordResetEnabled ? 'enabled' : 'disabled'
+    };
+    let databaseOk = false;
+    try {
+      databaseOk = await repository.ping();
+    } catch {
+      databaseOk = false;
+    }
+    checks.database = databaseOk ? 'ok' : 'unavailable';
+
+    const ready = databaseOk;
+    res.status(ready ? 200 : 503).json({
+      status: ready ? 'ready' : 'not_ready',
+      checks
+    });
+  });
 
   // Public reads have no session dependency and never grant a role-based approval bypass.
   // Avoid cached listings/profiles remaining visible after suspension or rejection.
@@ -179,14 +249,32 @@ export function createApp(options: CreateAppOptions = {}) {
   const sessionMiddleware = createSessionMiddleware(config, sessionStore);
   const csrfMiddleware = createCsrfProtectionMiddleware(config);
   const authRateLimiters = createAuthRateLimiters(options.authRateLimits);
-  const passwordResetDelivery = options.passwordResetDelivery ?? noopPasswordResetDelivery;
   const passwordResetTokenTtlMs = options.passwordResetTokenTtlMs ?? PASSWORD_RESET_TOKEN_TTL_MS;
+  const passwordResetTokenPruneIntervalMs =
+    options.passwordResetTokenPruneIntervalMs ?? 60 * 60 * 1000;
+  const passwordResetTokenPruneLimit = options.passwordResetTokenPruneLimit ?? 200;
+  let lastPasswordResetTokenPruneAt = 0;
 
-  if (!options.passwordResetDelivery && config.NODE_ENV === 'production') {
-    console.warn(
-      'Password reset delivery is not configured: reset tokens are created but never sent. ' +
-        'Inject a PasswordResetDelivery implementation before launch.'
-    );
+  /**
+   * Bounded, throttled cleanup of expired/consumed reset tokens. It runs on the
+   * (already rate-limited) reset-request path so no scheduler is required, and it
+   * is awaited only once per interval. Failures are swallowed: housekeeping must
+   * never change a response or reveal whether an account exists.
+   */
+  async function pruneExpiredPasswordResetTokens(): Promise<void> {
+    const nowMs = Date.now();
+    if (nowMs - lastPasswordResetTokenPruneAt < passwordResetTokenPruneIntervalMs) {
+      return;
+    }
+    lastPasswordResetTokenPruneAt = nowMs;
+    try {
+      await repository.deleteExpiredPasswordResetTokens(
+        new Date(nowMs),
+        passwordResetTokenPruneLimit
+      );
+    } catch {
+      console.warn('Expired password-reset token cleanup failed.');
+    }
   }
 
   /**
@@ -404,46 +492,77 @@ export function createApp(options: CreateAppOptions = {}) {
     });
   });
 
+  /** Shared 503 body for a recovery feature that cannot actually deliver tokens. */
+  function passwordResetUnavailable(res: express.Response) {
+    return res.status(503).json({
+      error: {
+        code: 'PASSWORD_RESET_UNAVAILABLE',
+        message:
+          'Password recovery is not available right now. Please contact support to regain access.'
+      }
+    });
+  }
+
   // Password reset request. The response is identical whether or not the account
   // exists, and the token is only ever handed to the delivery implementation.
   instance.post(
     '/api/auth/password-reset/request',
     authRateLimiters.passwordResetRequestPerIp,
     async (req, res, next) => {
+      if (!passwordResetEnabled) {
+        return passwordResetUnavailable(res);
+      }
+
       try {
+        // Validation errors only reflect the submitted address, never the database.
         const parsed = passwordResetRequestSchema.parse(req.body ?? {});
+        await pruneExpiredPasswordResetTokens();
+
         const user = await repository.findUserByEmail(parsed.email);
 
         if (user && user.passwordHash && checkAccountEligibility(user).eligible) {
           const token = generatePasswordResetToken();
           const expiresAt = new Date(Date.now() + passwordResetTokenTtlMs);
 
-          await repository.createPasswordResetToken({
-            userId: user.id,
-            tokenHash: hashPasswordResetToken(token),
-            expiresAt
-          });
-
-          await repository.recordAuditEvent({
-            actorId: null,
-            action: 'PASSWORD_RESET_REQUESTED',
-            entityType: 'User',
-            entityId: user.id,
-            metadata: { expiresAt: expiresAt.toISOString() }
-          });
-
           try {
-            await passwordResetDelivery.sendPasswordReset({
+            await repository.createPasswordResetToken({
               userId: user.id,
-              email: user.email ?? parsed.email,
-              name: user.name,
-              token,
+              tokenHash: hashPasswordResetToken(token),
               expiresAt
             });
+
+            try {
+              await repository.recordAuditEvent({
+                actorId: null,
+                action: 'PASSWORD_RESET_REQUESTED',
+                entityType: 'User',
+                entityId: user.id,
+                metadata: { expiresAt: expiresAt.toISOString() }
+              });
+            } catch {
+              // Audit trouble must not change the response or block delivery.
+              console.warn('Failed to record PASSWORD_RESET_REQUESTED audit event.');
+            }
+
+            try {
+              // `passwordResetEnabled` guarantees a delivery implementation exists.
+              await passwordResetDelivery!.sendPasswordReset({
+                userId: user.id,
+                email: user.email ?? parsed.email,
+                name: user.name,
+                token,
+                expiresAt
+              });
+            } catch {
+              // Never surface delivery errors: they would reveal the account exists,
+              // and the token must not be logged.
+              console.error('Password reset delivery failed for user', user.id);
+            }
           } catch {
-            // Never surface delivery errors: they would reveal the account exists,
-            // and the token must not be logged.
-            console.error('Password reset delivery failed for user', user.id);
+            // Database failures are contained so that an unhealthy token table cannot
+            // turn the endpoint into an account-existence oracle (500 only for real
+            // accounts) or a 500 storm. Nothing about the account is logged.
+            console.error('Password reset token issuance failed.');
           }
         }
 
@@ -460,6 +579,10 @@ export function createApp(options: CreateAppOptions = {}) {
     '/api/auth/password-reset/confirm',
     authRateLimiters.passwordResetConfirmPerIp,
     async (req, res, next) => {
+      if (!passwordResetEnabled) {
+        return passwordResetUnavailable(res);
+      }
+
       try {
         const parsed = passwordResetConfirmSchema.parse(req.body ?? {});
         const genericFailure = () =>

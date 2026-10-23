@@ -19,7 +19,9 @@ const testConfig = envSchema.parse({
   PORT: 4000,
   DATABASE_URL: 'postgresql://orqeli:placeholder@localhost:5432/orqeli',
   WEB_ORIGIN: 'http://localhost:5173',
-  SESSION_SECRET: 'test-only-secret-that-is-at-least-thirty-two-characters'
+  SESSION_SECRET: 'test-only-secret-that-is-at-least-thirty-two-characters',
+  // Recovery endpoints only exist when explicitly enabled with a delivery.
+  PASSWORD_RESET_MODE: 'enabled'
 });
 
 interface CapturedReset {

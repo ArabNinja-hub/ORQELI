@@ -15,9 +15,11 @@
 import { createInterface } from 'node:readline/promises';
 import { PrismaClient } from '@prisma/client';
 import { env } from '../src/config.js';
-import { PrismaDataRepository, normalizeEmail } from '../src/repository.js';
+import { PrismaDataRepository } from '../src/repository.js';
 import {
   AdminProvisioningError,
+  assertDatabaseTargetValidation,
+  describeDatabaseName,
   describeDatabaseTarget,
   parseAdminProvisioningArgs,
   provisionAdmin
@@ -33,8 +35,14 @@ Options:
   --name "<full name>"    Display name (required)
   --phone <number>        Optional phone number
   --password-stdin        Read the password from stdin instead of a hidden prompt
-  --yes                   Skip the interactive confirmation (required when not a TTY)
+  --expect-target <t>     Exact "Target database:" value; required with --yes
+  --yes                   Skip the interactive prompt (also requires --expect-target)
   --help                  Show this help
+
+The printed target is derived from DATABASE_URL and never contains credentials.
+With --yes the operator must also pass --expect-target copied from that line, so
+a mistyped or unexpected DATABASE_URL cannot be provisioned silently. Without
+--yes the command asks the operator to type the database name.
 
 The password is never accepted as an argument, is hashed with Argon2id and is
 never printed. The command creates a new ADMIN only; it will not modify or
@@ -123,22 +131,22 @@ async function readPassword(passwordStdin: boolean): Promise<string> {
   return first;
 }
 
-async function confirm(argvEmail: string | undefined, yes: boolean): Promise<boolean> {
-  if (yes) {
-    return true;
-  }
+async function confirmInteractive(
+  databaseName: string,
+  argvEmail: string | undefined
+): Promise<boolean> {
   if (!process.stdin.isTTY) {
     throw new AdminProvisioningError(
       'NOT_CONFIRMED',
-      'Confirmation requires --yes when running without a terminal.'
+      'Confirmation requires --yes (with --expect-target) when running without a terminal.'
     );
   }
   const readline = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = await readline.question(
-      `Type the administrator email (${argvEmail ?? ''}) to confirm: `
+      `Type the database name (${databaseName}) to create ADMIN ${argvEmail ?? ''}: `
     );
-    return normalizeEmail(answer) === normalizeEmail(argvEmail ?? '');
+    return answer.trim() === databaseName;
   } finally {
     readline.close();
   }
@@ -161,13 +169,27 @@ async function main(): Promise<number> {
   }
 
   // Show the target (host/database only, never credentials) before writing.
-  process.stdout.write(
-    `Target database: ${describeDatabaseTarget(env.DATABASE_URL)} (NODE_ENV=${env.NODE_ENV}).\n`
-  );
+  const target = describeDatabaseTarget(env.DATABASE_URL);
+  process.stdout.write(`Target database: ${target} (NODE_ENV=${env.NODE_ENV}).\n`);
 
-  const confirmed = await confirm(args.email, args.yes);
-  if (!confirmed) {
-    throw new AdminProvisioningError('NOT_CONFIRMED', 'Confirmation failed; no account was created.');
+  // The target check runs before any connection is opened and cannot be bypassed
+  // with --yes: non-interactive runs must name the target explicitly.
+  assertDatabaseTargetValidation({
+    expectedTarget: args.expectTarget,
+    actualTarget: target,
+    nonInteractive: args.yes
+  });
+
+  if (args.yes) {
+    process.stdout.write('Target confirmed with --expect-target; skipping interactive prompt.\n');
+  } else {
+    const confirmed = await confirmInteractive(describeDatabaseName(env.DATABASE_URL), args.email);
+    if (!confirmed) {
+      throw new AdminProvisioningError(
+        'NOT_CONFIRMED',
+        'Confirmation failed; no account was created.'
+      );
+    }
   }
 
   const password = await readPassword(args.passwordStdin);

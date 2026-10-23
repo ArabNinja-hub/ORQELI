@@ -7,6 +7,9 @@ process.env.SESSION_SECRET = 'test-only-secret-that-is-at-least-thirty-two-chara
 
 const {
   AdminProvisioningError,
+  assertDatabaseTargetValidation,
+  databaseTargetMatches,
+  describeDatabaseName,
   describeDatabaseTarget,
   parseAdminProvisioningArgs,
   provisionAdmin
@@ -181,4 +184,128 @@ test('the database target description never reveals credentials or query secrets
   assert.ok(!target.includes('leak'));
   assert.equal(describeDatabaseTarget(undefined), '(DATABASE_URL is not set)');
   assert.equal(describeDatabaseTarget('not a url'), '(unparseable DATABASE_URL)');
+});
+
+test('--yes cannot bypass target validation, even in production', () => {
+  const target = describeDatabaseTarget(
+    'postgresql://orqeli:secret@db.internal.example:5432/orqeli?schema=public'
+  );
+
+  // No --expect-target and non-interactive: refused before any connection.
+  assert.throws(
+    () =>
+      assertDatabaseTargetValidation({
+        expectedTarget: undefined,
+        actualTarget: target,
+        nonInteractive: true
+      }),
+    (error: unknown) => codeOf(error) === 'INVALID_INPUT'
+  );
+
+  // Mismatched target: refused with a dedicated code.
+  assert.throws(
+    () =>
+      assertDatabaseTargetValidation({
+        expectedTarget: 'db.internal.example:5432/some_other_database (schema public)',
+        actualTarget: target,
+        nonInteractive: true
+      }),
+    (error: unknown) => codeOf(error) === 'TARGET_MISMATCH'
+  );
+
+  // Matching target (case/space tolerant): allowed.
+  assert.doesNotThrow(() =>
+    assertDatabaseTargetValidation({
+      expectedTarget: '  DB.INTERNAL.EXAMPLE:5432/orqeli   (schema public) ',
+      actualTarget: target,
+      nonInteractive: true
+    })
+  );
+
+  // Interactive runs may omit it; the prompt provides the check instead.
+  assert.doesNotThrow(() =>
+    assertDatabaseTargetValidation({
+      expectedTarget: undefined,
+      actualTarget: target,
+      nonInteractive: false
+    })
+  );
+});
+
+test('the CLI parser accepts --expect-target in both forms and rejects a missing value', () => {
+  const inline = parseAdminProvisioningArgs([
+    '--email',
+    'admin@example.com',
+    '--name',
+    'Admin',
+    '--yes',
+    '--expect-target=db.example:5432/orqeli (schema public)'
+  ]);
+  assert.equal(inline.expectTarget, 'db.example:5432/orqeli (schema public)');
+  assert.equal(inline.yes, true);
+
+  const separate = parseAdminProvisioningArgs([
+    '--expect-target',
+    'db.example:5432/orqeli (schema public)'
+  ]);
+  assert.equal(separate.expectTarget, 'db.example:5432/orqeli (schema public)');
+
+  assert.throws(
+    () => parseAdminProvisioningArgs(['--expect-target']),
+    (error: unknown) => codeOf(error) === 'INVALID_INPUT'
+  );
+});
+
+test('database names and targets are derived without exposing credentials', () => {
+  assert.equal(
+    describeDatabaseName('postgresql://u:p@db.example:5432/orqeli?schema=public'),
+    'orqeli'
+  );
+  assert.equal(describeDatabaseName(undefined), '');
+  assert.equal(databaseTargetMatches('A/B', ' a/b '), true);
+  assert.equal(databaseTargetMatches('a/b', 'a/c'), false);
+});
+
+test('production provisioning still refuses to promote an existing account', async () => {
+  const repository = new InMemoryDataRepository();
+  await repository.createCustomerUser({
+    name: 'Existing Customer',
+    email: 'promote.me@example.com',
+    phone: null,
+    passwordHash: await hashPassword('ExistingCustomerPass123!')
+  });
+
+  await assert.rejects(
+    provisionAdmin({
+      repository,
+      confirmed: true,
+      input: {
+        name: 'Existing Customer',
+        email: 'promote.me@example.com',
+        password: 'EscalatedAdminPass123!'
+      }
+    }),
+    (error: unknown) => codeOf(error) === 'ACCOUNT_EXISTS'
+  );
+
+  const unchanged = await repository.findUserByEmail('promote.me@example.com');
+  assert.equal(unchanged?.role, 'CUSTOMER');
+});
+
+test('a refused confirmation never creates an account', async () => {
+  const repository = new InMemoryDataRepository();
+  await assert.rejects(
+    provisionAdmin({
+      repository,
+      confirmed: false,
+      input: {
+        name: 'Unconfirmed Admin',
+        email: 'unconfirmed@example.com',
+        password: 'UnconfirmedPass123!'
+      }
+    }),
+    (error: unknown) => codeOf(error) === 'NOT_CONFIRMED'
+  );
+
+  assert.equal(await repository.findUserByEmail('unconfirmed@example.com'), null);
 });

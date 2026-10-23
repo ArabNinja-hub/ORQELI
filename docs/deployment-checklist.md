@@ -16,9 +16,13 @@ Do not treat a green CI run as proof that these items are done.
 - Every session issued before this release lacks `sessionVersion` and will be
   rejected on its next request, so all users must sign in again. This is the
   intended fail-closed behaviour; announce it in the release notes.
-- The API logs a warning at startup when `NODE_ENV=production` because no
-  password-reset delivery implementation is configured. That warning is expected
-  until §5 is completed.
+- Password recovery ships **disabled** (`PASSWORD_RESET_MODE=disabled`): the
+  endpoints answer `503 PASSWORD_RESET_UNAVAILABLE`, `/api/health` reports
+  `passwordReset: "disabled"` and `/api/health/ready` exposes the same value. That
+  is the honest state until §5 is completed — do not present recovery to users.
+- Setting `PASSWORD_RESET_MODE=enabled` without injecting a
+  `PasswordResetDelivery` implementation makes the API fail at startup in
+  production (deliberate fail-fast).
 - Administrators must be provisioned with the CLI in §6; there is no HTTP route.
 
 ---
@@ -121,6 +125,13 @@ Required by the code: PostgreSQL with the migrations in
 database and drift-checked, but this repository has **no** production database
 configuration.
 
+**Verification commands:** `npm run db:test-client -w @orqeli/api` generates a
+test-only Prisma client (query compiler + `pg` adapter) and
+`npm run db:verify-security -w @orqeli/api` exercises the real
+`PrismaDataRepository` password-reset, password-change, session-invalidation and
+concurrency paths against the database. Run both against a non-production
+database before promoting a release.
+
 **Decisions required (record the chosen values, do not invent defaults):**
 
 - [ ] Provider, region, PostgreSQL major version, and network exposure
@@ -192,9 +203,13 @@ configured.
 - [ ] E-mail (and/or SMS) provider, sending domain and credentials stored in the
       secret manager.
 - [ ] Implement `PasswordResetDelivery` (see
-      `apps/api/src/passwordReset.ts`) and inject it where `createApp` is called;
-      this requires a small code change, reviewed and tested, because no
-      credentials or provider exist in the repository.
+      `apps/api/src/passwordReset.ts`), inject it where `createApp` is called and
+      set `PASSWORD_RESET_MODE=enabled`; this requires a small code change,
+      reviewed and tested, because no credentials or provider exist in the
+      repository. Enable the mode only once delivery works — enabling it without a
+      delivery implementation aborts startup in production.
+- [ ] Confirm the product does not link to a reset screen while recovery is
+      disabled; the API answers `503 PASSWORD_RESET_UNAVAILABLE`.
 - [ ] SPF, DKIM and DMARC records for the sending domain.
 - [ ] Reset link design: the token belongs in the reset page URL (query string
       or fragment). The page must not load third-party resources with the token
@@ -215,7 +230,8 @@ There is no HTTP endpoint that can create administrators. Use the CLI with
 production database credentials, from a trusted machine:
 
 ```bash
-npm run admin:create -- --email <address> --name "<full name>" --password-stdin
+npm run admin:create -- --email <address> --name "<full name>" \
+  --expect-target "<host:port/database (schema public)>" --password-stdin
 ```
 
 - The password is read from stdin or a hidden prompt and is never accepted as an

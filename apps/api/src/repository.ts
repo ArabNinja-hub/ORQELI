@@ -203,6 +203,14 @@ export interface DataRepository {
     now: Date;
   }): Promise<boolean>;
   changePassword(input: { userId: string; passwordHash: string }): Promise<number>;
+  /**
+   * Deletes at most `limit` reset-token rows that are already unusable: expired
+   * (`expiresAt < now`) or consumed (`usedAt` set). Returns the number of rows
+   * deleted, so callers can loop until a bounded cleanup is complete.
+   */
+  deleteExpiredPasswordResetTokens(now: Date, limit: number): Promise<number>;
+  /** Cheap dependency check used by the readiness endpoint. */
+  ping(): Promise<boolean>;
   recordAuditEvent(input: {
     actorId: string | null;
     action: string;
@@ -462,12 +470,30 @@ export class PrismaDataRepository implements DataRepository {
     }
   }
 
+  /**
+   * Serialises every credential-related write for one account by taking a row lock
+   * on its `User` record. Without it, two concurrent reset requests can each miss
+   * the other's uncommitted token (READ COMMITTED) and both stay valid, and a token
+   * inserted by an in-flight request survives a concurrent password change.
+   *
+   * Every caller takes this lock first, so the lock order is consistent and
+   * deadlock-free.
+   */
+  private async lockUserRow(
+    tx: { $queryRaw: PrismaClient['$queryRaw'] },
+    userId: string
+  ): Promise<void> {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+  }
+
   async createPasswordResetToken(input: {
     userId: string;
     tokenHash: string;
     expiresAt: Date;
   }): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
+      await this.lockUserRow(tx, input.userId);
+
       // Issuing a new token invalidates every outstanding one for this account.
       await tx.passwordResetToken.updateMany({
         where: { userId: input.userId, usedAt: null },
@@ -495,6 +521,9 @@ export class PrismaDataRepository implements DataRepository {
     now: Date;
   }): Promise<boolean> {
     return this.prisma.$transaction(async (tx) => {
+      // Same lock order as issuance and password change: user row first.
+      await this.lockUserRow(tx, input.userId);
+
       // Conditional update: only one concurrent request can flip usedAt from null,
       // which makes the token strictly single-use even under a request race.
       const consumed = await tx.passwordResetToken.updateMany({
@@ -539,6 +568,11 @@ export class PrismaDataRepository implements DataRepository {
 
   async changePassword(input: { userId: string; passwordHash: string }): Promise<number> {
     return this.prisma.$transaction(async (tx) => {
+      // Serialise against concurrent reset-token issuance: any token created after
+      // this transaction commits is legitimately newer than the new password, and
+      // any token already committed is revoked below.
+      await this.lockUserRow(tx, input.userId);
+
       const user = await tx.user.update({
         where: { id: input.userId },
         data: {
@@ -565,6 +599,25 @@ export class PrismaDataRepository implements DataRepository {
 
       return user.sessionVersion;
     });
+  }
+
+  async deleteExpiredPasswordResetTokens(now: Date, limit: number): Promise<number> {
+    // Bounded delete: the sub-select caps the work per statement so housekeeping can
+    // never lock the table for an unbounded amount of time.
+    const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 1000));
+    return this.prisma.$executeRaw`
+      DELETE FROM "PasswordResetToken"
+      WHERE "id" IN (
+        SELECT "id" FROM "PasswordResetToken"
+        WHERE "expiresAt" < ${now} OR "usedAt" IS NOT NULL
+        ORDER BY "createdAt"
+        LIMIT ${boundedLimit}
+      )`;
+  }
+
+  async ping(): Promise<boolean> {
+    await this.prisma.$queryRaw`SELECT 1`;
+    return true;
   }
 
   async recordAuditEvent(input: {
@@ -1473,6 +1526,25 @@ export class InMemoryDataRepository implements DataRepository {
     });
 
     return updated.sessionVersion;
+  }
+
+  async deleteExpiredPasswordResetTokens(now: Date, limit: number): Promise<number> {
+    const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 1000));
+    let deleted = 0;
+    for (const [id, token] of this.passwordResetTokens) {
+      if (deleted >= boundedLimit) {
+        break;
+      }
+      if (token.expiresAt.getTime() < now.getTime() || token.usedAt !== null) {
+        this.passwordResetTokens.delete(id);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
+  async ping(): Promise<boolean> {
+    return true;
   }
 
   /** Test-only inspection helper: stored reset tokens including their hashes. */

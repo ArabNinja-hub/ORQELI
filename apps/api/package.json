@@ -16,6 +16,8 @@
     "db:studio": "prisma studio --schema prisma/schema.prisma",
     "db:verify-flow": "tsx scripts/verify-db-flow.ts",
     "db:verify-discovery": "tsx scripts/verify-discovery-db.ts",
+    "db:test-client": "tsx scripts/prepare-test-prisma-client.ts",
+    "db:verify-security": "tsx scripts/verify-account-security-db.ts",
     "admin:create": "tsx scripts/create-admin.ts"
   },
   "dependencies": {
@@ -31,6 +33,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@prisma/adapter-pg": "^6.19.3",
     "@types/connect-pg-simple": "^7.0.3",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
