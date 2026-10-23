@@ -22,9 +22,13 @@ The city is a string rather than a closed enum so additional Zambian cities can 
 
 - **PostgreSQL Session Persistence**: Sessions are stored in the PostgreSQL `"session"` table via `express-session` and `connect-pg-simple` (`apps/api/src/session.ts`), matching the `Session` model in `apps/api/prisma/schema.prisma`. `MemoryStore` is explicitly prohibited in `production`.
 - **Cookie Security & Fixation Defense**: Session cookies use `httpOnly: true`, `secure: true` in `production`, `sameSite: 'lax'` (configurable), and explicit `maxAge`. On login and registration, `req.session.regenerate()` rotates the session ID before binding `userId`, invalidating any pre-authentication session ID. Logout calls `req.session.destroy()` and clears the cookie.
+- **Session Invalidation & Absolute Lifetime**: Each session stores the `User.sessionVersion` it was issued with, plus `authenticatedAt`. Changing or resetting a password increments `sessionVersion`, so every other session (and any session issued before the change) is destroyed on its next request. Sessions older than `7 days` (`ABSOLUTE_SESSION_LIFETIME_MS` in `apps/api/src/session.ts`) are rejected even when the rolling `SESSION_TTL_HOURS` expiry has not elapsed, and sessions with a missing/invalid/future `authenticatedAt` fail closed.
 - **CSRF Defense-in-Depth**: State-changing requests (`POST`, `PUT`, `PATCH`, `DELETE`) enforce `Origin`/`Referer` allowlisting, reject `Sec-Fetch-Site: cross-site`, reject browser form content types (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`), and **require** a valid HMAC-SHA256 `X-CSRF-Token` header verified with `crypto.timingSafeEqual`. A missing header returns `403 CSRF_MISSING`; a bad signature returns `403 CSRF_INVALID`. Anonymous tokens (issued before login/registration) are accepted only while the request has no session-bound CSRF secret, so an anonymous token cannot authorise an authenticated session. The token is derived from `SESSION_SECRET` and a per-session secret, never stored in JavaScript-readable storage, and is not a session identifier.
 - **Server-Derived Identity & Ownership**: The API resolves `req.user` strictly from `req.session.userId` against the database on every request and verifies that the account is `ACTIVE`. Client-submitted `userId`, `ownerId`, `role`, or `status` fields are never trusted. Every business-owner query and mutation scopes by `ownerScope(req.user)` (`{ ownerId: req.user.id }`).
-- **Authentication Rate Limiting**: `apps/api/src/rateLimit.ts` applies fixed-window limits to `POST /api/auth/login` (per IP address plus per IP+email identity) and `POST /api/auth/register` (per IP address). Rejections return `429` with `Retry-After` and a generic `RATE_LIMITED` body that never repeats the submitted email or password. Counters are in-process, so a multi-instance deployment also needs a shared/gateway limiter. Limits assume `req.ip` is trustworthy: in production `trust proxy` is enabled, so the reverse proxy must overwrite, not append to, `X-Forwarded-For`.
+- **Authentication Rate Limiting**: `apps/api/src/rateLimit.ts` applies fixed-window limits to `POST /api/auth/login` (per IP address plus per IP+email identity), `POST /api/auth/register` (per IP address), `POST /api/auth/password-reset/request` and `POST /api/auth/password-reset/confirm` (per IP address) and `POST /api/auth/password/change` (per authenticated account). Rejections return `429` with `Retry-After` and a generic `RATE_LIMITED` body that never repeats the submitted email or password. Counters are in-process, so a multi-instance deployment also needs a shared/gateway limiter. Limits assume `req.ip` is trustworthy: in production `trust proxy` is enabled, so the reverse proxy must overwrite, not append to, `X-Forwarded-For`.
+- **Password Reset & Change**: `POST /api/auth/password-reset/request` answers with the same generic `200` for every address, generating a 256-bit random token only for eligible accounts. Only the SHA-256 digest is stored (`PasswordResetToken`), tokens expire after 30 minutes, only one token per account is outstanding, and consumption is a conditional single-row update so a token can be used exactly once. `POST /api/auth/password-reset/confirm` and `POST /api/auth/password/change` (authenticated, current password required) re-hash with Argon2id, increment `sessionVersion`, and audit `PASSWORD_RESET_*` / `PASSWORD_CHANGED`. Tokens are never returned in responses or written to audit records; delivery is injected through a `PasswordResetDelivery` seam, and the default implementation is a no-op because no e-mail provider exists in this repository.
+- **Authentication Audit Trail**: `USER_LOGIN_FAILED` and `USER_LOGIN_BLOCKED` rows are written with `actorId: null` for failures. The e-mail address is replaced by a truncated HMAC-SHA256 pseudonym keyed with `SESSION_SECRET`, so operators can correlate attempts without storing PII. Audit write failures are swallowed so they cannot change the login response. Volume is bounded by the login rate limiter.
+- **Administrator Provisioning**: `apps/api/scripts/create-admin.ts` (`npm run admin:create`) is the only way to create an `ADMIN`. It requires explicit confirmation, reads the password from a hidden prompt or stdin (never argv), validates input with Zod, refuses to modify or promote an existing account, hashes with Argon2id, and records an `ADMIN_PROVISIONED` audit event (`actorId: null`, `metadata.source = "cli"`). No HTTP route can create or elevate an administrator.
 - **Response Caching**: `/api/auth`, `/api/account`, `/api/owner` and `/api/admin` responses are sent with `Cache-Control: no-store` so personal data and CSRF tokens are never stored by browsers or shared proxies. Public discovery responses are already `no-store`.
 - **CSRF Origin Trust**: The allowlist is `WEB_ORIGIN` plus, outside production only, the origin implied by the `Host` header (needed for localhost/LAN/preview development). Production requests must match `WEB_ORIGIN` exactly, so a rebound or attacker-controlled host name cannot satisfy the origin check.
 - **Browser Hardening**: The production web build emits a `<meta http-equiv="Content-Security-Policy">` (self-only scripts, self + Google Fonts styles, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`) plus a `strict-origin-when-cross-origin` referrer policy. `frame-ancestors`, HSTS and `X-Frame-Options` cannot be expressed through `meta`; the host/proxy must send them as HTTP response headers.
@@ -45,17 +49,40 @@ The fix applied is a root `overrides` entry pinning `deepmerge-ts` to `^8.0.2` (
 - A business owner may own multiple businesses.
 - Working hours use weekday (0–6) and local wall-clock strings; the Phase 1 schema does not store a business timezone. Before booking implementation, add or define a trusted timezone field/config (initially `Africa/Lusaka`) and handle UTC conversion consistently.
 - Guest bookings do not require a user record; collection, retention, and privacy requirements for contact details must be decided before launch.
-- Initial migrations should be generated from the Prisma schema, reviewed, and committed. Database tooling could not be exercised in the current environment because PostgreSQL/Docker are not installed.
+- Initial migrations should be generated from the Prisma schema, reviewed, and committed. The `20261023094500_password_reset_and_session_version` migration was written to Prisma's documented SQL conventions because the Prisma migration engine could not be downloaded in the authoring environment; all migrations were then applied successfully to a PostgreSQL 16 instance. CI's `prisma migrate diff --from-migrations ... --exit-code` step is the authoritative drift gate and must pass before deployment.
+- The Prisma CLI cannot be exercised against a live database in the authoring sandbox (no engine binary), so `migrate deploy`, `db:verify-flow` and `db:verify-discovery` remain CI-only checks.
 
 ## Outstanding security work (not implemented)
 
-These are known gaps, not silent assumptions:
+These are known gaps, not silent assumptions. Infrastructure-dependent items are
+tracked in [deployment-checklist.md](deployment-checklist.md).
 
-- **Administrator provisioning**: there is no endpoint that creates `ADMIN` accounts; an administrator must be provisioned directly in the database with an Argon2id hash produced by the application. Server-side rejection of `ADMIN` self-registration is covered by tests.
-- **Multi-instance rate limiting**: the built-in limiter is per process. Use a shared store or edge/gateway limits before running more than one API instance.
-- **Account lifecycle**: no email/phone verification, password reset, password change, MFA, or absolute session lifetime. Adding password reset requires single-use, hashed, time-limited tokens and a fixed response message that does not reveal account existence.
-- **Enumeration**: registration answers `409 EMAIL_ALREADY_IN_USE` / `PHONE_ALREADY_IN_USE`, which confirms that an account exists. Login is intentionally generic.
-- **Monitoring**: failed logins are rate limited but not recorded as `AuditEvent`s (that would let an unauthenticated caller write rows). Forward API logs to a monitored sink and alert on `RATE_LIMITED` volume.
-- **Backups/DR**: no backup or restore procedure exists in the repository. The deployment owner must configure PostgreSQL point-in-time recovery or scheduled `pg_dump` retention and prove a restore.
-- **Deployment hardening**: the repository has no hosting/proxy configuration, so HTTPS redirect, HSTS, `frame-ancestors`, TLS versions and cookie `Secure` delivery must be configured and verified at the host.
-- **Dependency supply chain**: GitHub Actions are pinned by tag, not commit SHA.
+- **Password-reset delivery**: tokens are created and stored safely, but nothing
+  sends them. A `PasswordResetDelivery` implementation backed by a real e-mail
+  (or SMS) provider must be injected before account recovery works.
+- **Account lifecycle**: no e-mail/phone verification, no MFA. Registration
+  accepts unverified addresses.
+- **Multi-instance rate limiting**: the built-in limiter is per process. Use a
+  shared store or edge/gateway limits before running more than one API instance.
+- **Proxy topology**: production assumes exactly one trusted proxy hop and
+  overwrites nothing itself. `trust proxy` is deliberately unchanged because the
+  deployment topology is not part of this repository; see the checklist for the
+  required verification steps.
+- **Enumeration trade-off**: registration still answers
+  `409 EMAIL_ALREADY_IN_USE` / `PHONE_ALREADY_IN_USE`. That is a deliberate UX
+  choice: a returning user must learn that they already have an account (and
+  should use password reset instead). The cost is that an attacker can confirm
+  whether an address is registered. Login responses, admin-only data and the
+  password-reset request endpoint are all generic. Removing the disclosure would
+  require an e-mail-verification flow first, otherwise a user who mistypes their
+  address would receive false success.
+- **Monitoring**: audit rows are written but no log shipping, alerting or on-call
+  process exists. Suggested thresholds are in the deployment checklist; they are
+  recommendations, not operational monitoring.
+- **Backups/DR**: no backup or restore procedure exists in the repository. The
+  deployment owner must configure backups and prove a restore.
+- **Deployment hardening**: the repository has no hosting/proxy configuration, so
+  HTTPS redirect, HSTS, `frame-ancestors`, TLS versions and cookie `Secure`
+  delivery must be configured and verified at the host.
+- **Dependency supply chain**: GitHub Actions are now pinned to full commit SHAs;
+  refresh the pins deliberately when upgrading the actions.

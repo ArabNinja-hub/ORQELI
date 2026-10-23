@@ -12,9 +12,10 @@ The original repository had only this README and no application framework, packa
 - Business statuses are `PENDING`, `APPROVED`, `REJECTED`, and `SUSPENDED`; new records default to pending. Public discovery/booking access must filter for approved businesses.
 - Business records include city and location; city is free text for extensibility and indexed with status. Launch UI city choices are Kitwe and Ndola.
 - Server-verified session authentication (`express-session` + `connect-pg-simple`), Argon2id password hashing, CSRF protections, role-based access control (`requireRole`), and business-owner tenant isolation (`ownerScope`) are implemented across `/api/auth/*`, `/api/account`, `/api/owner/*`, and `/api/admin/*`. Public registration never permits creating `ADMIN` accounts, and newly registered business owners always create `PENDING` business listings subject to manual administrator review.
+- Account security includes hashed single-use password-reset tokens (30-minute expiry), an authenticated password change that requires the current password, session invalidation on any credential change (`User.sessionVersion`), a seven-day absolute session lifetime, and pseudonymised audit records for failed/blocked logins. Administrators are created only with the `npm run admin:create` CLI — never through HTTP. E-mail delivery for reset tokens is not configured in this repository; see [docs/deployment-checklist.md](docs/deployment-checklist.md).
 - Booking data includes guest contact fields and a unique reference. Booking creation, availability calculation, transaction/concurrency protections, and confirmation are not implemented; the UI explicitly does not claim an appointment was made. For a real booking flow, revalidate approval, service duration, working hours and conflicts in a transaction. PostgreSQL exclusion constraints (with a range and `btree_gist`) are a recommended additional migration to prevent overlapping active appointments under concurrency.
 - Subscription, featured listing, payments, and commissions are intentionally out of scope.
-- API configuration is validated with Zod, response errors use a stable structure, and Helmet/CORS/request body limits are configured. Authentication endpoints are rate limited (in-process fixed window: login per IP and per IP+email, registration per IP) and return `429 RATE_LIMITED` with `Retry-After`; `npm audit` is part of CI. The production web build injects a Content-Security-Policy and referrer policy. Outstanding items (shared rate-limit store, email verification, password reset, MFA, backups, proxy-level HSTS/frame protections) are listed in [docs/architecture.md](docs/architecture.md#outstanding-security-work-not-implemented).
+- API configuration is validated with Zod, response errors use a stable structure, and Helmet/CORS/request body limits are configured. Authentication and account-recovery endpoints are rate limited (in-process fixed window: login per IP and per IP+email, registration per IP, password reset per IP, password change per account) and return `429 RATE_LIMITED` with `Retry-After`; `npm audit` is part of CI. The production web build injects a Content-Security-Policy and referrer policy. Outstanding items (shared rate-limit store, e-mail verification and reset delivery, MFA, backups, proxy-level HSTS/frame protections) are listed in [docs/architecture.md](docs/architecture.md#outstanding-security-work-not-implemented) and [docs/deployment-checklist.md](docs/deployment-checklist.md).
 
 See [docs/architecture.md](docs/architecture.md) for design choices and the schema/migration approach.
 
@@ -110,6 +111,9 @@ That message is the UI fallback for a non-JSON response. In development the usua
 - `POST /api/auth/login` — Authenticates email and password using Argon2, rejects `DISABLED` or `SUSPENDED` accounts (`403`), regenerates the session ID to prevent session fixation, and returns `200` with `{ user, csrfToken }`. Repeated attempts are rate limited per client IP and per IP+email (`429 RATE_LIMITED` with `Retry-After`).
 - `POST /api/auth/logout` — Destroys the server-side PostgreSQL session, clears the session cookie, and returns `200` with `{ "status": "ok" }`.
 - `GET /api/auth/me` — Returns `200` with the authenticated user's safe profile (`{ user, csrfToken }`) or `401 UNAUTHENTICATED`.
+- `POST /api/auth/password-reset/request` — `{ email }`. Always returns `200 { "status": "ok" }`, whether or not the account exists. For an eligible account it creates a single-use token (only its SHA-256 hash is stored, 30-minute expiry) and hands it to the configured delivery implementation. **No delivery provider is configured in this repository**, so the default implementation discards the token; see the deployment checklist. Rate limited per IP.
+- `POST /api/auth/password-reset/confirm` — `{ token, password }`. Consumes the token exactly once, re-hashes the password with Argon2id, invalidates every existing session for the account, and returns `200 { "status": "ok" }`. Unknown, expired, superseded and already-used tokens all return the same `400 INVALID_RESET_TOKEN`. Requires a CSRF token; rate limited per IP.
+- `POST /api/auth/password/change` — Authenticated. `{ currentPassword, newPassword }`. Verifies the current password, updates the hash, invalidates every other session, rotates the caller's session ID and returns `200 { status, csrfToken }`. Requires a CSRF token; rate limited per account.
 
 ### Role-Protected & Owner-Scoped Endpoints
 - `GET /api/account` — Authenticated customer/user profile and account bookings (`CUSTOMER`, `BUSINESS_OWNER`, `ADMIN`).
@@ -121,6 +125,20 @@ That message is the UI fallback for a non-JSON response. In development the usua
 - `PATCH /api/admin/businesses/:businessId/status` — Updates a business review status (`PENDING`, `APPROVED`, `REJECTED`, `SUSPENDED`) as `ADMIN` and records an `AuditEvent`.
 - `GET /api/admin/users` — Lists safe user profiles for `ADMIN` oversight (never exposes `passwordHash`).
 - `PATCH /api/admin/users/:userId/status` — Updates a user account status (`ACTIVE`, `DISABLED`, `SUSPENDED`) as `ADMIN` and records an `AuditEvent`.
+
+## Administrator provisioning
+
+There is no HTTP endpoint that can create or promote an administrator. Provision the first
+administrator deliberately from a trusted machine with production database credentials:
+
+```bash
+npm run admin:create -- --email <address> --name "<full name>" --password-stdin
+```
+
+The password is read from stdin or a hidden interactive prompt (never an argument), `--yes`
+or typing the e-mail address confirms the action, existing accounts are never promoted, and an
+`ADMIN_PROVISIONED` audit event is written with `actorId: null` and `metadata.source = "cli"`.
+The command is not run by CI (CI only executes `--help` as a smoke test).
 
 ## Environment variables
 

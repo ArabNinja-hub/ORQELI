@@ -34,9 +34,20 @@ export interface StoredUserRecord {
   passwordHash: string | null;
   role: Role;
   status: UserAccountStatus;
+  // Version stored in the session at login; a mismatch means the credentials changed.
+  sessionVersion: number;
   createdAt: Date;
   updatedAt: Date;
   ownedBusinesses: StoredBusinessRecord[];
+}
+
+export interface StoredPasswordResetToken {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
 }
 
 export interface SafeBookingSummary {
@@ -173,6 +184,25 @@ export interface DataRepository {
     passwordHash: string;
     business: BusinessInput;
   }): Promise<SafeUserProfile>;
+  createAdminUser(input: {
+    name: string;
+    email: string;
+    phone: string | null;
+    passwordHash: string;
+  }): Promise<SafeUserProfile>;
+  createPasswordResetToken(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<void>;
+  findPasswordResetToken(tokenHash: string): Promise<StoredPasswordResetToken | null>;
+  consumePasswordResetToken(input: {
+    tokenId: string;
+    userId: string;
+    passwordHash: string;
+    now: Date;
+  }): Promise<boolean>;
+  changePassword(input: { userId: string; passwordHash: string }): Promise<number>;
   recordAuditEvent(input: {
     actorId: string | null;
     action: string;
@@ -387,6 +417,154 @@ export class PrismaDataRepository implements DataRepository {
     } catch (error) {
       mapPrismaUnknownDuplicate(error);
     }
+  }
+
+  async createAdminUser(input: {
+    name: string;
+    email: string;
+    phone: string | null;
+    passwordHash: string;
+  }): Promise<SafeUserProfile> {
+    const normalizedEmail = normalizeEmail(input.email);
+    const normalizedPhone = normalizePhone(input.phone);
+
+    try {
+      const created = await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            name: input.name.trim(),
+            email: normalizedEmail,
+            phone: normalizedPhone,
+            passwordHash: input.passwordHash,
+            role: 'ADMIN',
+            status: 'ACTIVE'
+          },
+          include: { ownedBusinesses: true }
+        });
+
+        // actorId is null: provisioning happens outside an authenticated request.
+        await tx.auditEvent.create({
+          data: {
+            actorId: null,
+            action: 'ADMIN_PROVISIONED',
+            entityType: 'User',
+            entityId: user.id,
+            metadata: { source: 'cli', role: 'ADMIN' }
+          }
+        });
+
+        return user;
+      });
+
+      return toSafeUser(created as StoredUserRecord);
+    } catch (error) {
+      mapPrismaUnknownDuplicate(error);
+    }
+  }
+
+  async createPasswordResetToken(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      // Issuing a new token invalidates every outstanding one for this account.
+      await tx.passwordResetToken.updateMany({
+        where: { userId: input.userId, usedAt: null },
+        data: { usedAt: new Date() }
+      });
+      await tx.passwordResetToken.create({
+        data: {
+          userId: input.userId,
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt
+        }
+      });
+    });
+  }
+
+  async findPasswordResetToken(tokenHash: string): Promise<StoredPasswordResetToken | null> {
+    const token = await this.prisma.passwordResetToken.findUnique({ where: { tokenHash } });
+    return (token as StoredPasswordResetToken | null) ?? null;
+  }
+
+  async consumePasswordResetToken(input: {
+    tokenId: string;
+    userId: string;
+    passwordHash: string;
+    now: Date;
+  }): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      // Conditional update: only one concurrent request can flip usedAt from null,
+      // which makes the token strictly single-use even under a request race.
+      const consumed = await tx.passwordResetToken.updateMany({
+        where: {
+          id: input.tokenId,
+          userId: input.userId,
+          usedAt: null,
+          expiresAt: { gt: input.now }
+        },
+        data: { usedAt: input.now }
+      });
+      if (consumed.count !== 1) {
+        return false;
+      }
+
+      const user = await tx.user.update({
+        where: { id: input.userId },
+        data: {
+          passwordHash: input.passwordHash,
+          sessionVersion: { increment: 1 }
+        }
+      });
+
+      await tx.passwordResetToken.updateMany({
+        where: { userId: input.userId, usedAt: null },
+        data: { usedAt: input.now }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          actorId: null,
+          action: 'PASSWORD_RESET_COMPLETED',
+          entityType: 'User',
+          entityId: input.userId,
+          metadata: { sessionVersion: user.sessionVersion }
+        }
+      });
+
+      return true;
+    });
+  }
+
+  async changePassword(input: { userId: string; passwordHash: string }): Promise<number> {
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({
+        where: { id: input.userId },
+        data: {
+          passwordHash: input.passwordHash,
+          sessionVersion: { increment: 1 }
+        }
+      });
+
+      // A password change also voids any outstanding reset token.
+      await tx.passwordResetToken.updateMany({
+        where: { userId: input.userId, usedAt: null },
+        data: { usedAt: new Date() }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          actorId: input.userId,
+          action: 'PASSWORD_CHANGED',
+          entityType: 'User',
+          entityId: input.userId,
+          metadata: { sessionVersion: user.sessionVersion }
+        }
+      });
+
+      return user.sessionVersion;
+    });
   }
 
   async recordAuditEvent(input: {
@@ -724,6 +902,7 @@ export class InMemoryDataRepository implements DataRepository {
   private readonly businesses = new Map<string, StoredBusinessRecord>();
   private readonly bookings = new Map<string, SafeBookingSummary>();
   private readonly auditEvents: StoredAuditEvent[] = [];
+  private readonly passwordResetTokens = new Map<string, StoredPasswordResetToken>();
 
   private generateId(prefix: string): string {
     return `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
@@ -770,6 +949,7 @@ export class InMemoryDataRepository implements DataRepository {
     passwordHash: string | null;
     role: Role;
     status?: UserAccountStatus;
+    sessionVersion?: number;
   }): StoredUserRecord {
     const normalizedEmail = input.email ? normalizeEmail(input.email) : null;
     const normalizedPhone = normalizePhone(input.phone ?? null);
@@ -785,6 +965,7 @@ export class InMemoryDataRepository implements DataRepository {
       passwordHash: input.passwordHash,
       role: input.role,
       status: input.status ?? 'ACTIVE',
+      sessionVersion: input.sessionVersion ?? 0,
       createdAt: now,
       updatedAt: now
     };
@@ -864,6 +1045,7 @@ export class InMemoryDataRepository implements DataRepository {
       passwordHash: input.passwordHash,
       role: 'CUSTOMER',
       status: 'ACTIVE',
+      sessionVersion: 0,
       createdAt: now,
       updatedAt: now
     };
@@ -901,6 +1083,7 @@ export class InMemoryDataRepository implements DataRepository {
       passwordHash: input.passwordHash,
       role: 'BUSINESS_OWNER',
       status: 'ACTIVE',
+      sessionVersion: 0,
       createdAt: now,
       updatedAt: now
     };
@@ -1144,5 +1327,156 @@ export class InMemoryDataRepository implements DataRepository {
     });
 
     return toSafeUser(this.hydrateUser(updated));
+  }
+
+  async createAdminUser(input: {
+    name: string;
+    email: string;
+    phone: string | null;
+    passwordHash: string;
+  }): Promise<SafeUserProfile> {
+    const normalizedEmail = normalizeEmail(input.email);
+    const normalizedPhone = normalizePhone(input.phone);
+    this.assertUniqueEmailAndPhone(normalizedEmail, normalizedPhone);
+
+    const now = new Date();
+    const id = this.generateId('usr');
+    const record: Omit<StoredUserRecord, 'ownedBusinesses'> = {
+      id,
+      email: normalizedEmail,
+      phone: normalizedPhone,
+      name: input.name.trim(),
+      passwordHash: input.passwordHash,
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      sessionVersion: 0,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.users.set(id, record);
+
+    await this.recordAuditEvent({
+      actorId: null,
+      action: 'ADMIN_PROVISIONED',
+      entityType: 'User',
+      entityId: id,
+      metadata: { source: 'cli', role: 'ADMIN' }
+    });
+
+    return toSafeUser(this.hydrateUser(record));
+  }
+
+  async createPasswordResetToken(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<void> {
+    const now = new Date();
+    for (const [id, token] of this.passwordResetTokens) {
+      if (token.userId === input.userId && token.usedAt === null) {
+        this.passwordResetTokens.set(id, { ...token, usedAt: now });
+      }
+    }
+    const id = this.generateId('prt');
+    this.passwordResetTokens.set(id, {
+      id,
+      userId: input.userId,
+      tokenHash: input.tokenHash,
+      expiresAt: input.expiresAt,
+      usedAt: null,
+      createdAt: now
+    });
+  }
+
+  async findPasswordResetToken(tokenHash: string): Promise<StoredPasswordResetToken | null> {
+    for (const token of this.passwordResetTokens.values()) {
+      if (token.tokenHash === tokenHash) {
+        return { ...token };
+      }
+    }
+    return null;
+  }
+
+  async consumePasswordResetToken(input: {
+    tokenId: string;
+    userId: string;
+    passwordHash: string;
+    now: Date;
+  }): Promise<boolean> {
+    const token = this.passwordResetTokens.get(input.tokenId);
+    if (
+      !token ||
+      token.userId !== input.userId ||
+      token.usedAt !== null ||
+      token.expiresAt.getTime() <= input.now.getTime()
+    ) {
+      return false;
+    }
+
+    this.passwordResetTokens.set(token.id, { ...token, usedAt: input.now });
+
+    const user = this.users.get(input.userId);
+    if (!user) {
+      return false;
+    }
+    const updatedUser: Omit<StoredUserRecord, 'ownedBusinesses'> = {
+      ...user,
+      passwordHash: input.passwordHash,
+      sessionVersion: user.sessionVersion + 1,
+      updatedAt: input.now
+    };
+    this.users.set(input.userId, updatedUser);
+
+    for (const [id, other] of this.passwordResetTokens) {
+      if (other.userId === input.userId && other.usedAt === null) {
+        this.passwordResetTokens.set(id, { ...other, usedAt: input.now });
+      }
+    }
+
+    await this.recordAuditEvent({
+      actorId: null,
+      action: 'PASSWORD_RESET_COMPLETED',
+      entityType: 'User',
+      entityId: input.userId,
+      metadata: { sessionVersion: updatedUser.sessionVersion }
+    });
+
+    return true;
+  }
+
+  async changePassword(input: { userId: string; passwordHash: string }): Promise<number> {
+    const user = this.users.get(input.userId);
+    if (!user) {
+      throw new Error('User not found.');
+    }
+    const updated: Omit<StoredUserRecord, 'ownedBusinesses'> = {
+      ...user,
+      passwordHash: input.passwordHash,
+      sessionVersion: user.sessionVersion + 1,
+      updatedAt: new Date()
+    };
+    this.users.set(input.userId, updated);
+
+    const now = new Date();
+    for (const [id, token] of this.passwordResetTokens) {
+      if (token.userId === input.userId && token.usedAt === null) {
+        this.passwordResetTokens.set(id, { ...token, usedAt: now });
+      }
+    }
+
+    await this.recordAuditEvent({
+      actorId: input.userId,
+      action: 'PASSWORD_CHANGED',
+      entityType: 'User',
+      entityId: input.userId,
+      metadata: { sessionVersion: updated.sessionVersion }
+    });
+
+    return updated.sessionVersion;
+  }
+
+  /** Test-only inspection helper: stored reset tokens including their hashes. */
+  getPasswordResetTokens(): StoredPasswordResetToken[] {
+    return [...this.passwordResetTokens.values()].map((token) => ({ ...token }));
   }
 }

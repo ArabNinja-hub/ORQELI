@@ -125,6 +125,14 @@ export interface AuthRateLimitSettings {
   registerWindowMs: number;
   /** Registrations allowed per IP address per window. */
   registerMaxPerIp: number;
+  /** Window for the password reset/change limiters. */
+  passwordWindowMs: number;
+  /** Password-reset requests allowed per IP address per window. */
+  passwordResetRequestMaxPerIp: number;
+  /** Password-reset confirmations allowed per IP address per window. */
+  passwordResetConfirmMaxPerIp: number;
+  /** Password changes allowed per authenticated account per window. */
+  passwordChangeMaxPerUser: number;
 }
 
 export const DEFAULT_AUTH_RATE_LIMITS: AuthRateLimitSettings = {
@@ -132,7 +140,11 @@ export const DEFAULT_AUTH_RATE_LIMITS: AuthRateLimitSettings = {
   loginMaxPerIdentity: 10,
   loginMaxPerIp: 50,
   registerWindowMs: 60 * 60 * 1000,
-  registerMaxPerIp: 20
+  registerMaxPerIp: 20,
+  passwordWindowMs: 60 * 60 * 1000,
+  passwordResetRequestMaxPerIp: 5,
+  passwordResetConfirmMaxPerIp: 10,
+  passwordChangeMaxPerUser: 10
 };
 
 export function clientIp(req: Request): string {
@@ -156,6 +168,9 @@ export interface AuthRateLimiters {
   loginPerIp: RateLimiter;
   loginPerIdentity: RateLimiter;
   registerPerIp: RateLimiter;
+  passwordResetRequestPerIp: RateLimiter;
+  passwordResetConfirmPerIp: RateLimiter;
+  passwordChangePerUser: RateLimiter;
 }
 
 export function createAuthRateLimiters(
@@ -181,6 +196,24 @@ export function createAuthRateLimiters(
       windowMs: settings.registerWindowMs,
       max: settings.registerMaxPerIp,
       keyGenerator: clientIp
+    }),
+    passwordResetRequestPerIp: createRateLimiter({
+      name: 'password-reset-request-ip',
+      windowMs: settings.passwordWindowMs,
+      max: settings.passwordResetRequestMaxPerIp,
+      keyGenerator: clientIp
+    }),
+    passwordResetConfirmPerIp: createRateLimiter({
+      name: 'password-reset-confirm-ip',
+      windowMs: settings.passwordWindowMs,
+      max: settings.passwordResetConfirmMaxPerIp,
+      keyGenerator: clientIp
+    }),
+    passwordChangePerUser: createRateLimiter({
+      name: 'password-change-user',
+      windowMs: settings.passwordWindowMs,
+      max: settings.passwordChangeMaxPerUser,
+      keyGenerator: (req) => req.user?.id ?? clientIp(req)
     })
   };
 }

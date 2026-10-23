@@ -8,13 +8,15 @@ on:
 
 permissions:
   contents: read
+  # Needed only for the "Comment discovery log on failure" step below. Pull-request
+  # comments are issue comments, so no pull-requests scope is granted.
   issues: write
-  pull-requests: write
 
 jobs:
   verify:
     name: Migrate, typecheck, test, build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -39,9 +41,14 @@ jobs:
       WEB_ORIGIN: http://localhost:5173
 
     steps:
-      - uses: actions/checkout@v4
+      # Third-party actions are pinned to reviewed commit SHAs (the current v4/v7
+      # releases live in main-, minor- or patch-refreshable tags, so a tag alone is
+      # mutable). Update the SHA and the trailing comment together.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -72,6 +79,34 @@ jobs:
       - name: Migration status
         run: npm run db:status
 
+      - name: Verify password-reset and session-version objects exist
+        run: |
+          PGPASSWORD=orqeli_ci_password psql -h 127.0.0.1 -U orqeli -d orqeli -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'User' AND column_name = 'sessionVersion'
+            ) THEN
+              RAISE EXCEPTION 'User.sessionVersion is missing';
+            END IF;
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.tables
+              WHERE table_name = 'PasswordResetToken'
+            ) THEN
+              RAISE EXCEPTION 'PasswordResetToken table is missing';
+            END IF;
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_indexes WHERE indexname = 'PasswordResetToken_tokenHash_key'
+            ) THEN
+              RAISE EXCEPTION 'PasswordResetToken.tokenHash unique index is missing';
+            END IF;
+          END $$;
+          SQL
+
+      - name: Administrator CLI smoke test (help only, no database writes)
+        run: npm run admin:create -w @orqeli/api -- --help
+
       - name: Fail if migrations drift from schema.prisma
         working-directory: apps/api
         run: >-
@@ -93,14 +128,14 @@ jobs:
           npm run db:verify-discovery -w @orqeli/api 2>&1 | tee /tmp/discovery.log
       - name: Upload discovery verification log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: discovery-log
           path: /tmp/discovery.log
           if-no-files-found: warn
       - name: Comment discovery log on failure
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const fs = require('fs');

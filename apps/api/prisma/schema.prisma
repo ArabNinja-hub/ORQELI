@@ -41,11 +41,15 @@ model User {
   passwordHash     String?
   role             UserRole     @default(CUSTOMER)
   status           UserStatus   @default(ACTIVE)
+  // Incremented whenever credentials change; sessions store the version they were
+  // issued with so a password change/reset invalidates every other session.
+  sessionVersion   Int          @default(0)
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
   ownedBusinesses  Business[]   @relation("BusinessOwner")
   bookings         Booking[]    @relation("CustomerBookings")
   auditEvents      AuditEvent[] @relation("ActorEvents")
+  passwordResetTokens PasswordResetToken[] @relation("UserPasswordResetTokens")
 }
 
 model Business {
@@ -127,6 +131,19 @@ model AuditEvent {
   createdAt   DateTime @default(now())
   @@index([entityType, entityId, createdAt])
   @@index([actorId, createdAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation("UserPasswordResetTokens", fields: [userId], references: [id], onDelete: Cascade)
+  // Only the SHA-256 hash of the single-use token is stored, never the token itself.
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model Session {

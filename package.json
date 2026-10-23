@@ -13,7 +13,8 @@
     "db:migrate": "npm run db:migrate -w @orqeli/api --",
     "db:deploy": "npm run db:deploy -w @orqeli/api",
     "db:status": "npm run db:status -w @orqeli/api",
-    "db:studio": "npm run db:studio -w @orqeli/api"
+    "db:studio": "npm run db:studio -w @orqeli/api",
+    "admin:create": "npm run admin:create -w @orqeli/api --"
   },
   "overrides": {
     "deepmerge-ts": "^8.0.2"

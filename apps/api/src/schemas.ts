@@ -33,6 +33,21 @@ const optionalEmailSchema = z
   .nullable()
   .transform((val) => (val && val.trim().length > 0 ? normalizeEmail(val) : null));
 
+export const passwordSchema = z
+  .string()
+  .min(8, 'Password must be at least 8 characters.')
+  .max(128, 'Password must be 128 characters or fewer.')
+  .refine((val) => val.trim().length >= 8, {
+    message: 'Password cannot consist only of whitespace.'
+  });
+
+const emailFieldSchema = z
+  .string()
+  .trim()
+  .email('Please provide a valid email address.')
+  .max(254, 'Email address must be 254 characters or fewer.')
+  .transform(normalizeEmail);
+
 export const businessOnboardingSchema = z.object({
   name: z
     .string()
@@ -75,13 +90,7 @@ export const registerSchema = z
       .max(254, 'Email address must be 254 characters or fewer.')
       .transform(normalizeEmail),
     phone: optionalPhoneSchema,
-    password: z
-      .string()
-      .min(8, 'Password must be at least 8 characters.')
-      .max(128, 'Password must be 128 characters or fewer.')
-      .refine((val) => val.trim().length >= 8, {
-        message: 'Password cannot consist only of whitespace.'
-      }),
+    password: passwordSchema,
     business: businessOnboardingSchema.optional(),
     businessName: z.string().trim().optional(),
     businessDescription: z.string().trim().optional(),
@@ -215,3 +224,25 @@ export const adminUpdateBusinessStatusSchema = z.object({
 export const adminUpdateUserStatusSchema = z.object({
   status: z.enum(['ACTIVE', 'DISABLED', 'SUSPENDED'])
 });
+
+export const passwordResetRequestSchema = z.object({
+  email: emailFieldSchema
+});
+
+export const passwordResetConfirmSchema = z.object({
+  token: z
+    .string()
+    .trim()
+    .max(128, 'Reset token is too long.')
+    .regex(/^[A-Za-z0-9_-]+$/, 'Reset token is malformed.'),
+  password: passwordSchema
+});
+
+export const passwordChangeSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Current password is required.').max(128),
+    newPassword: passwordSchema
+  })
+  .refine((data) => data.currentPassword !== data.newPassword, {
+    message: 'The new password must be different from the current password.'
+  });

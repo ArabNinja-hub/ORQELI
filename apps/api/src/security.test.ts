@@ -291,6 +291,41 @@ test('production CSRF checks do not trust an origin derived from the Host header
   );
 });
 
+test('trust proxy stays at one hop in production and follows TRUST_PROXY elsewhere', () => {
+  const productionApp = createApp({
+    config: productionConfig,
+    repository: new InMemoryDataRepository(),
+    sessionStore: createPgSessionStore(productionConfig, { pool: createSimulatedPgPool() })
+  });
+  assert.equal(productionApp.get('trust proxy'), 1);
+
+  const withoutProxy = envSchema.parse({
+    NODE_ENV: 'development',
+    DATABASE_URL: 'postgresql://orqeli:placeholder@localhost:5432/orqeli',
+    SESSION_SECRET: 'test-only-secret-that-is-at-least-thirty-two-characters',
+    TRUST_PROXY: 'false'
+  });
+  const appWithoutProxy = createApp({
+    config: withoutProxy,
+    repository: new InMemoryDataRepository(),
+    sessionStore: createPgSessionStore(withoutProxy, { pool: createSimulatedPgPool() })
+  });
+  assert.equal(appWithoutProxy.get('trust proxy'), false);
+
+  const withProxy = envSchema.parse({
+    NODE_ENV: 'development',
+    DATABASE_URL: 'postgresql://orqeli:placeholder@localhost:5432/orqeli',
+    SESSION_SECRET: 'test-only-secret-that-is-at-least-thirty-two-characters',
+    TRUST_PROXY: 'true'
+  });
+  const appWithProxy = createApp({
+    config: withProxy,
+    repository: new InMemoryDataRepository(),
+    sessionStore: createPgSessionStore(withProxy, { pool: createSimulatedPgPool() })
+  });
+  assert.equal(appWithProxy.get('trust proxy'), 1);
+});
+
 test('authenticated API responses are marked Cache-Control: no-store and Helmet headers are present', async () => {
   const csrfResponse = await fetch(`${baseUrl}/api/auth/csrf`);
   assert.equal(csrfResponse.status, 200);

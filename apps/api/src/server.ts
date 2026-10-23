@@ -3,7 +3,6 @@ import express from 'express';
 import type session from 'express-session';
 import cors from 'cors';
 import helmet from 'helmet';
-import argon2 from 'argon2';
 import { PrismaClient } from '@prisma/client';
 import { ZodError } from 'zod';
 import { env, type AppEnv } from './config.js';
@@ -13,8 +12,22 @@ import {
   createSessionMiddleware,
   createSimulatedPgPool,
   destroyAuthenticatedSession,
+  isAbsoluteSessionExpired,
   regenerateAuthenticatedSession
 } from './session.js';
+import {
+  hashPassword,
+  verifyPassword
+} from './passwords.js';
+import {
+  PASSWORD_RESET_TOKEN_TTL_MS,
+  deriveEmailPseudonym,
+  generatePasswordResetToken,
+  hashPasswordResetToken,
+  isPasswordResetTokenFormat,
+  noopPasswordResetDelivery,
+  type PasswordResetDelivery
+} from './passwordReset.js';
 import { createCsrfProtectionMiddleware, createCsrfToken } from './csrf.js';
 import {
   createAuthRateLimiters,
@@ -36,8 +49,13 @@ import {
   businessOnboardingSchema,
   loginSchema,
   ownerBusinessUpdateSchema,
+  passwordChangeSchema,
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
   registerSchema
 } from './schemas.js';
+
+export { hashPassword, verifyPassword };
 
 let prisma: PrismaClient | undefined;
 
@@ -46,32 +64,12 @@ export function getPrismaClient(): PrismaClient {
   return (prisma ??= new PrismaClient());
 }
 
-export async function hashPassword(password: string): Promise<string> {
-  return argon2.hash(password, {
-    type: argon2.argon2id,
-    memoryCost: 19456,
-    timeCost: 2,
-    parallelism: 1
-  });
-}
-
 let dummyPasswordHashPromise: Promise<string> | undefined;
 
 function getDummyPasswordHash(): Promise<string> {
   return (dummyPasswordHashPromise ??= hashPassword(
     'orqeli-constant-time-fallback-password'
   ));
-}
-
-export async function verifyPassword(
-  passwordHash: string,
-  password: string
-): Promise<boolean> {
-  try {
-    return await argon2.verify(passwordHash, password);
-  } catch {
-    return false;
-  }
 }
 
 function checkAccountEligibility(
@@ -104,6 +102,13 @@ export interface CreateAppOptions {
   sessionStore?: session.Store;
   /** Overrides for the built-in authentication rate limits (primarily for tests). */
   authRateLimits?: Partial<AuthRateLimitSettings>;
+  /**
+   * Out-of-band delivery for password-reset tokens. No e-mail provider is
+   * configured in this repository, so the default is a no-op.
+   */
+  passwordResetDelivery?: PasswordResetDelivery;
+  /** Overrides the reset-token lifetime (primarily for tests). */
+  passwordResetTokenTtlMs?: number;
 }
 
 export function createApp(options: CreateAppOptions = {}) {
@@ -124,6 +129,16 @@ export function createApp(options: CreateAppOptions = {}) {
   instance.disable('x-powered-by');
   if (config.NODE_ENV === 'production' || config.TRUST_PROXY) {
     instance.set('trust proxy', 1);
+  }
+  if (config.NODE_ENV === 'production') {
+    // The hosting topology is not part of this repository, so this assumption is
+    // documented and warned about rather than guessed at in code.
+    console.warn(
+      'Production enables Express "trust proxy" (1 hop). Terminate TLS at a trusted ' +
+        'reverse proxy that overwrites X-Forwarded-For; a directly internet-facing API ' +
+        'would let clients spoof req.ip and bypass IP-based rate limits. ' +
+        'See docs/deployment-checklist.md.'
+    );
   }
 
   instance.use(helmet());
@@ -164,6 +179,40 @@ export function createApp(options: CreateAppOptions = {}) {
   const sessionMiddleware = createSessionMiddleware(config, sessionStore);
   const csrfMiddleware = createCsrfProtectionMiddleware(config);
   const authRateLimiters = createAuthRateLimiters(options.authRateLimits);
+  const passwordResetDelivery = options.passwordResetDelivery ?? noopPasswordResetDelivery;
+  const passwordResetTokenTtlMs = options.passwordResetTokenTtlMs ?? PASSWORD_RESET_TOKEN_TTL_MS;
+
+  if (!options.passwordResetDelivery && config.NODE_ENV === 'production') {
+    console.warn(
+      'Password reset delivery is not configured: reset tokens are created but never sent. ' +
+        'Inject a PasswordResetDelivery implementation before launch.'
+    );
+  }
+
+  /**
+   * Records a failed/blocked login without ever storing the password, the raw
+   * e-mail address or a reset token. The e-mail is replaced by an HMAC pseudonym.
+   * Audit write failures are swallowed so an unauthenticated caller cannot turn a
+   * database problem into a different login response.
+   */
+  async function recordLoginAudit(
+    action: 'USER_LOGIN_FAILED' | 'USER_LOGIN_BLOCKED',
+    actorId: string | null,
+    email: string,
+    metadata: Record<string, unknown> = { reason: 'INVALID_CREDENTIALS' }
+  ): Promise<void> {
+    try {
+      await repository.recordAuditEvent({
+        actorId,
+        action,
+        entityType: 'Auth',
+        entityId: deriveEmailPseudonym(config.SESSION_SECRET, email),
+        metadata
+      });
+    } catch {
+      console.warn(`Failed to record ${action} audit event`);
+    }
+  }
 
   instance.use('/api', sessionMiddleware);
   instance.use('/api', csrfMiddleware);
@@ -178,7 +227,18 @@ export function createApp(options: CreateAppOptions = {}) {
       }
 
       const storedUser = await repository.findUserById(sessionUserId);
-      if (!storedUser || ! checkAccountEligibility(storedUser).eligible) {
+      if (!storedUser || !checkAccountEligibility(storedUser).eligible) {
+        await destroyAuthenticatedSession(req, res, config);
+        next();
+        return;
+      }
+
+      // Reject sessions issued before the credentials changed (password reset or
+      // change from any device) and sessions beyond the absolute lifetime.
+      const sessionIsStale =
+        req.session.sessionVersion !== storedUser.sessionVersion ||
+        isAbsoluteSessionExpired(req.session.authenticatedAt);
+      if (sessionIsStale) {
         await destroyAuthenticatedSession(req, res, config);
         next();
         return;
@@ -246,7 +306,7 @@ export function createApp(options: CreateAppOptions = {}) {
               passwordHash
             });
 
-      const csrfSecret = await regenerateAuthenticatedSession(req, createdUser.id);
+      const csrfSecret = await regenerateAuthenticatedSession(req, createdUser.id, 0);
       const csrfToken = createCsrfToken(config.SESSION_SECRET, csrfSecret);
 
       return res.status(201).json({
@@ -266,6 +326,7 @@ export function createApp(options: CreateAppOptions = {}) {
       if (!user || !user.passwordHash) {
         const dummyHash = await getDummyPasswordHash();
         await verifyPassword(dummyHash, parsed.password);
+        await recordLoginAudit('USER_LOGIN_FAILED', null, parsed.email);
         return res.status(401).json({
           error: {
             code: 'INVALID_CREDENTIALS',
@@ -276,6 +337,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
       const passwordMatches = await verifyPassword(user.passwordHash, parsed.password);
       if (!passwordMatches) {
+        await recordLoginAudit('USER_LOGIN_FAILED', null, parsed.email);
         return res.status(401).json({
           error: {
             code: 'INVALID_CREDENTIALS',
@@ -286,6 +348,9 @@ export function createApp(options: CreateAppOptions = {}) {
 
       const eligibility = checkAccountEligibility(user);
       if (!eligibility.eligible) {
+        await recordLoginAudit('USER_LOGIN_BLOCKED', user.id, parsed.email, {
+          reason: eligibility.code
+        });
         return res.status(403).json({
           error: {
             code: eligibility.code,
@@ -294,7 +359,7 @@ export function createApp(options: CreateAppOptions = {}) {
         });
       }
 
-      const csrfSecret = await regenerateAuthenticatedSession(req, user.id);
+      const csrfSecret = await regenerateAuthenticatedSession(req, user.id, user.sessionVersion);
       await repository.recordAuditEvent({
         actorId: user.id,
         action: 'USER_LOGGED_IN',
@@ -338,6 +403,153 @@ export function createApp(options: CreateAppOptions = {}) {
       csrfToken
     });
   });
+
+  // Password reset request. The response is identical whether or not the account
+  // exists, and the token is only ever handed to the delivery implementation.
+  instance.post(
+    '/api/auth/password-reset/request',
+    authRateLimiters.passwordResetRequestPerIp,
+    async (req, res, next) => {
+      try {
+        const parsed = passwordResetRequestSchema.parse(req.body ?? {});
+        const user = await repository.findUserByEmail(parsed.email);
+
+        if (user && user.passwordHash && checkAccountEligibility(user).eligible) {
+          const token = generatePasswordResetToken();
+          const expiresAt = new Date(Date.now() + passwordResetTokenTtlMs);
+
+          await repository.createPasswordResetToken({
+            userId: user.id,
+            tokenHash: hashPasswordResetToken(token),
+            expiresAt
+          });
+
+          await repository.recordAuditEvent({
+            actorId: null,
+            action: 'PASSWORD_RESET_REQUESTED',
+            entityType: 'User',
+            entityId: user.id,
+            metadata: { expiresAt: expiresAt.toISOString() }
+          });
+
+          try {
+            await passwordResetDelivery.sendPasswordReset({
+              userId: user.id,
+              email: user.email ?? parsed.email,
+              name: user.name,
+              token,
+              expiresAt
+            });
+          } catch {
+            // Never surface delivery errors: they would reveal the account exists,
+            // and the token must not be logged.
+            console.error('Password reset delivery failed for user', user.id);
+          }
+        }
+
+        return res.status(200).json({ status: 'ok' });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  // Password reset confirmation. Tokens are single-use, expiring and stored only
+  // as a SHA-256 digest; every failure mode returns the same generic error.
+  instance.post(
+    '/api/auth/password-reset/confirm',
+    authRateLimiters.passwordResetConfirmPerIp,
+    async (req, res, next) => {
+      try {
+        const parsed = passwordResetConfirmSchema.parse(req.body ?? {});
+        const genericFailure = () =>
+          res.status(400).json({
+            error: {
+              code: 'INVALID_RESET_TOKEN',
+              message: 'This password reset link is invalid or has expired.'
+            }
+          });
+
+        if (!isPasswordResetTokenFormat(parsed.token)) {
+          return genericFailure();
+        }
+
+        const record = await repository.findPasswordResetToken(
+          hashPasswordResetToken(parsed.token)
+        );
+        if (!record || record.usedAt || record.expiresAt.getTime() <= Date.now()) {
+          return genericFailure();
+        }
+
+        const passwordHash = await hashPassword(parsed.password);
+        const consumed = await repository.consumePasswordResetToken({
+          tokenId: record.id,
+          userId: record.userId,
+          passwordHash,
+          now: new Date()
+        });
+        if (!consumed) {
+          return genericFailure();
+        }
+
+        // Any session in this browser belonged to the old credentials.
+        await destroyAuthenticatedSession(req, res, config);
+        return res.status(200).json({ status: 'ok' });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  // Authenticated password change. Requires the current password and invalidates
+  // every other session by bumping the user's session version.
+  instance.post(
+    '/api/auth/password/change',
+    requireAuth(),
+    authRateLimiters.passwordChangePerUser,
+    async (req, res, next) => {
+      try {
+        const parsed = passwordChangeSchema.parse(req.body ?? {});
+        const stored = await repository.findUserById(req.user!.id);
+        if (!stored || !stored.passwordHash) {
+          return res.status(401).json({
+            error: { code: 'UNAUTHENTICATED', message: 'Authentication required.' }
+          });
+        }
+
+        const currentPasswordMatches = await verifyPassword(
+          stored.passwordHash,
+          parsed.currentPassword
+        );
+        if (!currentPasswordMatches) {
+          // 403 rather than 401: the caller is authenticated, and returning 401
+          // would make clients treat the still-valid session as expired.
+          return res.status(403).json({
+            error: {
+              code: 'INVALID_CREDENTIALS',
+              message: 'The current password is incorrect.'
+            }
+          });
+        }
+
+        const passwordHash = await hashPassword(parsed.newPassword);
+        const sessionVersion = await repository.changePassword({
+          userId: stored.id,
+          passwordHash
+        });
+
+        // Rotate this device's session onto the new version so the operator who
+        // changed the password stays signed in while every other session dies.
+        const csrfSecret = await regenerateAuthenticatedSession(req, stored.id, sessionVersion);
+        return res.status(200).json({
+          status: 'ok',
+          csrfToken: createCsrfToken(config.SESSION_SECRET, csrfSecret)
+        });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
 
   // Customer & authenticated account profile endpoint (always scoped to req.user.id)
   instance.get(
@@ -610,7 +822,14 @@ export function createApp(options: CreateAppOptions = {}) {
           }
         });
       }
-      console.error('Unhandled request error', error);
+      // Log only the error type, message and stack. Passing the whole error object
+      // can serialise ORM `meta`/driver details that may include query parameters
+      // (for example a submitted password hash or reset-token hash).
+      console.error(
+        'Unhandled request error:',
+        error instanceof Error ? `${error.name}: ${error.message}` : typeof error,
+        error instanceof Error ? error.stack : ''
+      );
       return res.status(500).json({
         error: {
           code: 'INTERNAL_ERROR',

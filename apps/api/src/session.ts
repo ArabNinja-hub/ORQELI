@@ -10,10 +10,39 @@ declare module 'express-session' {
     userId?: string;
     csrfSecret?: string;
     authenticatedAt?: string;
+    /** User.sessionVersion captured when the session was created. */
+    sessionVersion?: number;
   }
 }
 
 export const SESSION_TABLE_NAME = 'session';
+
+/**
+ * Absolute upper bound on an authenticated session, independent of the rolling
+ * `SESSION_TTL_HOURS` cookie/session-store expiry. Sessions older than this are
+ * rejected even if they are still active. Kept as a code constant (not an env
+ * var) so no deployment setting has to be invented; it only takes effect when
+ * SESSION_TTL_HOURS is configured above seven days.
+ */
+export const ABSOLUTE_SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function isAbsoluteSessionExpired(
+  authenticatedAt: string | undefined,
+  nowMs: number = Date.now()
+): boolean {
+  if (!authenticatedAt) {
+    return true;
+  }
+  const issuedAtMs = Date.parse(authenticatedAt);
+  if (!Number.isFinite(issuedAtMs)) {
+    return true;
+  }
+  // A timestamp in the future is treated as invalid rather than long-lived.
+  if (issuedAtMs > nowMs) {
+    return true;
+  }
+  return nowMs - issuedAtMs >= ABSOLUTE_SESSION_LIFETIME_MS;
+}
 
 const PgSessionStore = connectPgSimple(session);
 
@@ -162,7 +191,8 @@ export function createSessionMiddleware(
 
 export async function regenerateAuthenticatedSession(
   req: Request,
-  userId: string
+  userId: string,
+  sessionVersion: number
 ): Promise<string> {
   await new Promise<void>((resolve, reject) => {
     req.session.regenerate((err) => {
@@ -178,6 +208,7 @@ export async function regenerateAuthenticatedSession(
   req.session.userId = userId;
   req.session.csrfSecret = csrfSecret;
   req.session.authenticatedAt = new Date().toISOString();
+  req.session.sessionVersion = sessionVersion;
 
   await new Promise<void>((resolve, reject) => {
     req.session.save((err) => {
