@@ -17,6 +17,10 @@ import {
 } from './session.js';
 import { createCsrfProtectionMiddleware, createCsrfToken } from './csrf.js';
 import {
+  createAuthRateLimiters,
+  type AuthRateLimitSettings
+} from './rateLimit.js';
+import {
   BusinessSuspendedError,
   DuplicateFieldError,
   InMemoryDataRepository,
@@ -98,6 +102,8 @@ export interface CreateAppOptions {
   config?: AppEnv;
   repository?: DataRepository;
   sessionStore?: session.Store;
+  /** Overrides for the built-in authentication rate limits (primarily for tests). */
+  authRateLimits?: Partial<AuthRateLimitSettings>;
 }
 
 export function createApp(options: CreateAppOptions = {}) {
@@ -157,6 +163,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
   const sessionMiddleware = createSessionMiddleware(config, sessionStore);
   const csrfMiddleware = createCsrfProtectionMiddleware(config);
+  const authRateLimiters = createAuthRateLimiters(options.authRateLimits);
 
   instance.use('/api', sessionMiddleware);
   instance.use('/api', csrfMiddleware);
@@ -185,12 +192,23 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
+  // Authenticated surfaces may contain personal data and CSRF tokens; never let a
+  // browser or shared proxy store them.
+  instance.use(
+    ['/api/auth', '/api/account', '/api/owner', '/api/admin'],
+    (_req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      next();
+    }
+  );
+
   instance.get('/api/auth/csrf', (req, res) => {
     const csrfToken = createCsrfToken(config.SESSION_SECRET, req.session?.csrfSecret);
+    res.set('Cache-Control', 'no-store');
     return res.json({ csrfToken });
   });
 
-  instance.post('/api/auth/register', async (req, res, next) => {
+  instance.post('/api/auth/register', authRateLimiters.registerPerIp, async (req, res, next) => {
     try {
       const rawBody =
         req.body && typeof req.body === 'object'
@@ -240,7 +258,7 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
-  instance.post('/api/auth/login', async (req, res, next) => {
+  instance.post('/api/auth/login', authRateLimiters.loginPerIp, authRateLimiters.loginPerIdentity, async (req, res, next) => {
     try {
       const parsed = loginSchema.parse(req.body ?? {});
       const user = await repository.findUserByEmail(parsed.email);

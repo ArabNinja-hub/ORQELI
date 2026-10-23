@@ -90,10 +90,17 @@ export function createCsrfProtectionMiddleware(config: AppEnv): RequestHandler {
     if (configuredWebOrigin) {
       allowedOrigins.add(configuredWebOrigin);
     }
-    const hostHeader = req.headers.host;
-    if (typeof hostHeader === 'string' && hostHeader.length > 0) {
-      allowedOrigins.add(`http://${hostHeader.toLowerCase()}`);
-      allowedOrigins.add(`https://${hostHeader.toLowerCase()}`);
+    // Outside production, also accept the origin implied by the Host header. This
+    // keeps localhost, LAN and sandbox preview hostnames working during
+    // development without extra configuration. In production the Host header is
+    // attacker-influenced (DNS rebinding, crafted requests, misconfigured
+    // proxies), so only the explicitly configured WEB_ORIGIN is trusted.
+    if (config.NODE_ENV !== 'production') {
+      const hostHeader = req.headers.host;
+      if (typeof hostHeader === 'string' && hostHeader.length > 0) {
+        allowedOrigins.add(`http://${hostHeader.toLowerCase()}`);
+        allowedOrigins.add(`https://${hostHeader.toLowerCase()}`);
+      }
     }
 
     const originHeader = req.headers.origin;
