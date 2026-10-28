@@ -175,7 +175,7 @@ test('public school discovery searches directory, opens school profile, and hide
 
   await page.goto('/schools');
   await expect(
-    page.getByRole('heading', { name: /Find Your School in Zambia/i })
+    page.getByRole('heading', { name: /Find Your School on ORQELI Education/i })
   ).toBeVisible();
   await expect(
     page.getByText('Lukanga Day Secondary (Synthetic Demo)')
@@ -184,10 +184,10 @@ test('public school discovery searches directory, opens school profile, and hide
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
   ).toBe(true);
 
-  await page.getByRole('link', { name: /View School Profile/i }).click();
+  await page.getByRole('link', { name: /School profile/i }).click();
   await expect(page.getByText('SYN-REG-LUS-0101')).toBeVisible();
   await expect(
-    page.getByRole('link', { name: /Register Student Account/i })
+    page.getByRole('link', { name: /Register student account/i })
   ).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
@@ -368,18 +368,22 @@ test('verified student views published OPUS-style results, unpublished term noti
   await page.goto('/student');
   await expect(page.getByRole('heading', { name: 'Lubasi Phiri' })).toBeVisible();
   await expect(page.getByText('Distinction (1)')).toBeVisible();
+  await expect(
+    page.getByText(/Marks remain hidden until officially published/i)
+  ).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
   ).toBe(true);
 
   await page.getByRole('button', { name: /Academic History/i }).click();
-  await expect(
-    page.getByText(/Marks remain hidden until officially published/i)
-  ).toBeVisible();
+  await expect(page.getByText('Pending publication')).toBeVisible();
 
   await page.goto(
     '/student/schools/sch_syn_lus_01/learners/lrn_syn_901/report-cards/pck_syn_g8b_t2'
   );
+  await expect(
+    page.getByRole('heading', { name: 'Report card unavailable' })
+  ).toBeVisible();
   await expect(
     page.getByText(/strictly restricted to your own verified learner record/i)
   ).toBeVisible();
