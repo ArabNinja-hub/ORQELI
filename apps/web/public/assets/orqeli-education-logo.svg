@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 184" role="img" aria-label="ORQELI Education">
+  <path d="M 88 10 A 78 78 0 1 0 142.44 143.86 A 90 90 0 0 1 126.94 114.32 A 47 47 0 1 1 88 41 Z" fill="#0f2135" />
+  <path d="M 88 10 A 78 78 0 0 1 166 88.5 L 135 88.5 A 47 47 0 0 0 88 41 Z" fill="#1ca89b" />
+  <path d="M 135 88 A 78 78 0 0 0 213.5 166 L 213.5 135 A 47 47 0 0 1 166 88 Z" fill="#15797b" />
+  <path d="M 158.56 32.14 A 78 78 0 0 1 269.31 141.97 L 247.69 119.71 A 47 47 0 1 0 174.06 61.68 A 90 90 0 0 0 158.56 32.14 Z" fill="#0f2135" />
+  <path d="M 213 135 A 47 47 0 0 0 225 133.44 L 245 159.17 A 78 78 0 0 1 213 166 Z" fill="#0f2135" />
+  <path d="M 177 101 L 216 101 L 285 172 L 246 172 Z" fill="#0f2135" />
+  <text x="322" y="114" font-family="Manrope, 'DM Sans', Arial, sans-serif" font-size="96" font-weight="800" letter-spacing="4" fill="#0f2135">ORQELI</text>
+  <text x="326" y="156" font-family="'DM Sans', Arial, sans-serif" font-size="26" font-weight="700" letter-spacing="7" fill="#126e6b">EDUCATION · ZAMBIA</text>
+</svg>

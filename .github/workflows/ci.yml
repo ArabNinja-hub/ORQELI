@@ -2,14 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, 'feature/**', 'fix/**', 'arena/**']
+    branches: [main, education-rebuild, 'feature/**', 'fix/**', 'arena/**']
   pull_request:
-    branches: [main]
+    branches: [main, education-rebuild]
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
 
 jobs:
   verify:
@@ -32,7 +30,7 @@ jobs:
           --health-retries 20
 
     env:
-      # Throwaway credentials for the ephemeral CI database only. Never used outside CI.
+      # Ephemeral CI-only credentials for the throwaway container database.
       DATABASE_URL: postgresql://orqeli:orqeli_ci_password@127.0.0.1:5432/orqeli?schema=public
       SHADOW_DATABASE_URL: postgresql://orqeli:orqeli_ci_password@127.0.0.1:5432/orqeli_shadow?schema=public
       SESSION_SECRET: ci-only-session-secret-value-with-at-least-32-characters
@@ -78,50 +76,16 @@ jobs:
           --shadow-database-url "$SHADOW_DATABASE_URL"
           --exit-code
 
-      - name: Test
+      - name: Test API and web suites
         run: npm test
 
-      - name: Verify registration and session flows against PostgreSQL
+      - name: Verify academic workflow, isolation, and sessions against PostgreSQL
         run: npm run db:verify-flow -w @orqeli/api
-
-      - name: Verify discovery against PostgreSQL (Kitwe/Ndola, approval, pagination, privacy)
-        run: |
-          set -o pipefail
-          npm run db:verify-discovery -w @orqeli/api 2>&1 | tee /tmp/discovery.log
-      - name: Upload discovery verification log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: discovery-log
-          path: /tmp/discovery.log
-          if-no-files-found: warn
-      - name: Comment discovery log on failure
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            try {
-              const log = fs.readFileSync('/tmp/discovery.log', 'utf8').slice(0, 60000);
-              const body = `Discovery verification failed for commit ${context.sha.slice(0,7)}:\n\`\`\`\n${log}\n\`\`\``;
-              if (context.issue.number) {
-                await github.rest.issues.createComment({
-                  issue_number: context.issue.number,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  body,
-                });
-              } else {
-                console.log(body);
-              }
-            } catch (e) {
-              console.log('Failed to read discovery log', e);
-            }
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright discovery tests (desktop + mobile)
+      - name: Run Playwright browser tests (desktop + mobile)
         run: |
           npm run dev -w @orqeli/web -- --host 127.0.0.1 --port 5173 &
           echo $! > /tmp/web_pid

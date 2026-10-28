@@ -30,6 +30,7 @@ function readWorkspaceEnvFileValues(): Record<string, string> {
 }
 
 export default defineConfig(() => ({
+  base: process.env.VITE_BASE_PATH || '/',
   plugins: [react()],
   server: {
     host: '0.0.0.0',
@@ -37,7 +38,7 @@ export default defineConfig(() => ({
     proxy: {
       '/api': {
         target: resolveApiProxyTarget({ fileValues: readWorkspaceEnvFileValues() }),
-        changeOrigin: true
+        changeOrigin: false
       }
     }
   }

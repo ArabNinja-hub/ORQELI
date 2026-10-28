@@ -22,12 +22,14 @@ for (const envFilePath of resolveEnvFilePaths(path.dirname(fileURLToPath(import.
 
 const INSECURE_PLACEHOLDER_SECRETS = new Set([
   'replace_with_a_random_secret_of_at_least_32_characters',
-  'changeme_changeme_changeme_changeme'
+  'changeme_changeme_changeme_changeme',
+  'local-synthetic-sandbox-secret-not-for-production'
 ]);
 
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    HOST: z.string().trim().min(1).default('0.0.0.0'),
     PORT: z.coerce.number().int().min(1).max(65535).default(4000),
     DATABASE_URL: z
       .string()
@@ -46,7 +48,8 @@ export const envSchema = z
     TRUST_PROXY: z
       .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
       .default(false)
-      .transform((value) => value === true || value === 'true' || value === '1')
+      .transform((value) => value === true || value === 'true' || value === '1'),
+    DATA_STORE_MODE: z.enum(['postgres', 'memory-sandbox']).default('postgres')
   })
   .superRefine((config, ctx) => {
     if (
@@ -56,7 +59,14 @@ export const envSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['SESSION_SECRET'],
-        message: 'SESSION_SECRET must not use an example placeholder in production'
+        message: 'SESSION_SECRET must not use an example or sandbox placeholder in production'
+      });
+    }
+    if (config.NODE_ENV === 'production' && config.DATA_STORE_MODE === 'memory-sandbox') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['DATA_STORE_MODE'],
+        message: 'DATA_STORE_MODE="memory-sandbox" is strictly prohibited in production'
       });
     }
     if (config.SESSION_COOKIE_SAMESITE === 'none' && config.NODE_ENV !== 'production') {

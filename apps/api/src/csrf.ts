@@ -75,17 +75,6 @@ export function createCsrfProtectionMiddleware(config: AppEnv): RequestHandler {
       return;
     }
 
-    const secFetchSite = req.headers['sec-fetch-site'];
-    if (typeof secFetchSite === 'string' && secFetchSite.toLowerCase() === 'cross-site') {
-      res.status(403).json({
-        error: {
-          code: 'CSRF_REJECTED',
-          message: 'Cross-site state-changing requests are not permitted.'
-        }
-      });
-      return;
-    }
-
     const allowedOrigins = new Set<string>();
     if (configuredWebOrigin) {
       allowedOrigins.add(configuredWebOrigin);
@@ -97,6 +86,7 @@ export function createCsrfProtectionMiddleware(config: AppEnv): RequestHandler {
     }
 
     const originHeader = req.headers.origin;
+    let verifiedSameOriginHeader = false;
     if (typeof originHeader === 'string') {
       const normalizedOrigin = normalizeOrigin(originHeader);
       if (!normalizedOrigin || !allowedOrigins.has(normalizedOrigin)) {
@@ -108,6 +98,7 @@ export function createCsrfProtectionMiddleware(config: AppEnv): RequestHandler {
         });
         return;
       }
+      verifiedSameOriginHeader = true;
     } else if (typeof req.headers.referer === 'string') {
       const normalizedRefererOrigin = normalizeOrigin(req.headers.referer);
       if (!normalizedRefererOrigin || !allowedOrigins.has(normalizedRefererOrigin)) {
@@ -119,6 +110,27 @@ export function createCsrfProtectionMiddleware(config: AppEnv): RequestHandler {
         });
         return;
       }
+      verifiedSameOriginHeader = true;
+    }
+
+    // Per W3C Fetch Metadata, browsers set `Sec-Fetch-Site: cross-site` even on
+    // same-origin requests inside an embedded preview iframe (because the ancestor
+    // frame is cross-site). In production (where framing is denied), reject all
+    // `cross-site` metadata; in non-production, allow only when Origin/Referer was
+    // explicitly verified to match this server's allowed origin.
+    const secFetchSite = req.headers['sec-fetch-site'];
+    if (
+      typeof secFetchSite === 'string' &&
+      secFetchSite.toLowerCase() === 'cross-site' &&
+      (config.NODE_ENV === 'production' || !verifiedSameOriginHeader)
+    ) {
+      res.status(403).json({
+        error: {
+          code: 'CSRF_REJECTED',
+          message: 'Cross-site state-changing requests are not permitted.'
+        }
+      });
+      return;
     }
 
     const contentType = (req.headers['content-type'] ?? '').toLowerCase();
@@ -155,7 +167,7 @@ export function createCsrfProtectionMiddleware(config: AppEnv): RequestHandler {
     const valid = verifyCsrfToken(
       tokenValue,
       config.SESSION_SECRET,
-      req.session?.csrfSecret
+      req.session?.csrfSecret ?? req.sandboxAuth?.csrfSecret
     );
     if (!valid) {
       res.status(403).json({

@@ -13,6 +13,81 @@ declare module 'express-session' {
   }
 }
 
+declare global {
+  namespace Express {
+    interface Request {
+      sandboxAuth?: {
+        userId: string;
+        csrfSecret: string;
+      };
+    }
+  }
+}
+
+export interface SandboxSessionClaims {
+  userId: string;
+  csrfSecret: string;
+  exp: number;
+}
+
+export function createSandboxSessionToken(
+  sessionSecret: string,
+  input: { userId: string; csrfSecret: string; ttlHours: number }
+): string {
+  const claims: SandboxSessionClaims = {
+    userId: input.userId,
+    csrfSecret: input.csrfSecret,
+    exp: Math.floor(Date.now() / 1000) + input.ttlHours * 3600
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(claims), 'utf8').toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', sessionSecret)
+    .update(`sandbox-session:${encodedPayload}`)
+    .digest('base64url');
+  return `${encodedPayload}.${signature}`;
+}
+
+export function verifySandboxSessionToken(
+  sessionSecret: string,
+  token: string
+): { userId: string; csrfSecret: string } | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [encodedPayload, providedSignature] = parts;
+  if (!encodedPayload || !providedSignature) return null;
+
+  const expectedSignature = crypto
+    .createHmac('sha256', sessionSecret)
+    .update(`sandbox-session:${encodedPayload}`)
+    .digest('base64url');
+  const providedBuf = Buffer.from(providedSignature, 'utf8');
+  const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+  if (
+    providedBuf.length !== expectedBuf.length ||
+    !crypto.timingSafeEqual(providedBuf, expectedBuf)
+  ) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(encodedPayload, 'base64url').toString('utf8')
+    ) as Partial<SandboxSessionClaims>;
+    if (
+      typeof parsed.userId !== 'string' ||
+      typeof parsed.csrfSecret !== 'string' ||
+      typeof parsed.exp !== 'number' ||
+      parsed.exp < Math.floor(Date.now() / 1000)
+    ) {
+      return null;
+    }
+    return { userId: parsed.userId, csrfSecret: parsed.csrfSecret };
+  } catch {
+    return null;
+  }
+}
+
 export const SESSION_TABLE_NAME = 'session';
 
 const PgSessionStore = connectPgSimple(session);

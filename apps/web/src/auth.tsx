@@ -1,34 +1,20 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-
-export type UserRole = 'CUSTOMER' | 'BUSINESS_OWNER' | 'ADMIN';
-export type UserAccountStatus = 'ACTIVE' | 'DISABLED' | 'SUSPENDED';
-export type BusinessReviewStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
-
-export interface BusinessSummary {
-  id: string;
-  ownerId: string;
-  name: string;
-  description: string | null;
-  city: string;
-  location: string;
-  phone: string;
-  email: string | null;
-  status: BusinessReviewStatus;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface AuthenticatedUserProfile {
-  id: string;
-  email: string | null;
-  phone: string | null;
-  name: string;
-  role: UserRole;
-  status: UserAccountStatus;
-  createdAt: string;
-  updatedAt: string;
-  ownedBusinesses?: BusinessSummary[];
-}
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import type {
+  AuthenticatedUserProfile,
+  HealthResponse,
+  MembershipSummary,
+  StudentRegistrationPayload,
+  StudentRegistrationResponse
+} from './types';
+import { transportFetch } from './runtimeEnv';
 
 export interface ApiErrorDetail {
   path: Array<string | number>;
@@ -40,7 +26,12 @@ export class ApiRequestError extends Error {
   readonly code: string;
   readonly details: ApiErrorDetail[];
 
-  constructor(status: number, code: string, message: string, details: ApiErrorDetail[] = []) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    details: ApiErrorDetail[] = []
+  ) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = status;
@@ -49,46 +40,63 @@ export class ApiRequestError extends Error {
   }
 }
 
-export interface RegisterPayload {
-  role: 'CUSTOMER' | 'BUSINESS_OWNER';
-  name: string;
-  email: string;
-  phone?: string;
-  password: string;
-  business?: {
-    name: string;
-    description?: string;
-    city: string;
-    location: string;
-    phone: string;
-    email?: string;
-  };
+export interface LoginResult {
+  user: AuthenticatedUserProfile;
+  memberships: MembershipSummary[];
 }
 
 interface AuthContextValue {
   status: 'loading' | 'authenticated' | 'unauthenticated';
   user: AuthenticatedUserProfile | null;
+  memberships: MembershipSummary[];
   csrfToken: string | null;
-  login: (email: string, password: string) => Promise<AuthenticatedUserProfile>;
-  register: (payload: RegisterPayload) => Promise<AuthenticatedUserProfile>;
+  health: HealthResponse | null;
+  healthError: string | null;
+  refreshHealth: () => Promise<void>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  registerStudent: (
+    payload: StudentRegistrationPayload
+  ) => Promise<StudentRegistrationResponse>;
   logout: () => Promise<void>;
-  refreshSession: () => Promise<AuthenticatedUserProfile | null>;
+  refreshSession: () => Promise<LoginResult | null>;
   apiFetch: <T>(path: string, init?: RequestInit) => Promise<T>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 const NETWORK_ERROR_MESSAGE =
-  'The ORQELI API could not be reached. Check that the API is running and that the web dev server proxies /api to the API port.';
+  'The ORQELI Education API could not be reached. Check that the API is running and that the web server proxies /api to the API port.';
 
-/**
- * fetch() throws a TypeError (with no HTTP status) when the browser cannot reach
- * the server at all. Surfacing that as an ApiRequestError keeps the UI message
- * actionable instead of the generic "request could not be completed" fallback.
- */
+const SANDBOX_TOKEN_STORAGE_KEY = 'orqeli.sandbox_session_token.v1';
+
+function readStoredSandboxToken(): string | null {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      return sessionStorage.getItem(SANDBOX_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage access restrictions inside strict iframes.
+  }
+  return null;
+}
+
+function writeStoredSandboxToken(token: string | null): void {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      if (token) {
+        sessionStorage.setItem(SANDBOX_TOKEN_STORAGE_KEY, token);
+      } else {
+        sessionStorage.removeItem(SANDBOX_TOKEN_STORAGE_KEY);
+      }
+    }
+  } catch {
+    // Ignore storage access restrictions inside strict iframes.
+  }
+}
+
 async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(input, init);
+    return await transportFetch(input, init);
   } catch {
     throw new ApiRequestError(0, 'NETWORK_ERROR', NETWORK_ERROR_MESSAGE);
   }
@@ -111,22 +119,22 @@ export async function parseApiResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const errorObj =
       body && typeof body === 'object' && 'error' in body
-        ? (body as {
-            error?: {
-              code?: string;
-              message?: string;
-              details?: ApiErrorDetail[];
-            };
-          }).error
+        ? (
+            body as {
+              error?: {
+                code?: string;
+                message?: string;
+                details?: unknown;
+              };
+            }
+          ).error
         : undefined;
 
     if (!isJson) {
-      // Typically the Vite dev proxy failing to reach the API (it answers with a
-      // plain-text 500). Report the status so the misconfiguration is visible.
       throw new ApiRequestError(
         response.status,
         'UNEXPECTED_RESPONSE',
-        `The ORQELI API returned an unexpected response (HTTP ${response.status}). Check that the API is running on the port the web dev server proxies /api to.`
+        `The ORQELI Education API returned an unexpected response (HTTP ${response.status}). Check that the API is running on the configured port.`
       );
     }
 
@@ -134,7 +142,7 @@ export async function parseApiResponse<T>(response: Response): Promise<T> {
       response.status,
       errorObj?.code ?? 'REQUEST_FAILED',
       errorObj?.message ?? 'The request could not be completed.',
-      Array.isArray(errorObj?.details) ? errorObj.details : []
+      Array.isArray(errorObj?.details) ? (errorObj.details as ApiErrorDetail[]) : []
     );
   }
 
@@ -142,7 +150,7 @@ export async function parseApiResponse<T>(response: Response): Promise<T> {
     throw new ApiRequestError(
       response.status,
       'UNEXPECTED_RESPONSE',
-      `The ORQELI API returned an unexpected response (HTTP ${response.status}). Check that the API is running on the port the web dev server proxies /api to.`
+      `The ORQELI Education API returned an unexpected response (HTTP ${response.status}).`
     );
   }
 
@@ -150,140 +158,198 @@ export async function parseApiResponse<T>(response: Response): Promise<T> {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [status, setStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
+  const [status, setStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>(
+    'loading'
+  );
   const [user, setUser] = useState<AuthenticatedUserProfile | null>(null);
+  const [memberships, setMemberships] = useState<MembershipSummary[]>([]);
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const sandboxTokenRef = useRef<string | null>(readStoredSandboxToken());
 
-  const requestCsrfToken = useCallback(async (): Promise<string> => {
-    const response = await safeFetch('/api/auth/csrf', {
-      method: 'GET',
-      credentials: 'include'
-    });
-    const data = await parseApiResponse<{ csrfToken: string }>(response);
-    setCsrfToken(data.csrfToken);
-    return data.csrfToken;
+  const setSandboxToken = useCallback((token: string | null) => {
+    sandboxTokenRef.current = token;
+    writeStoredSandboxToken(token);
+  }, []);
+
+  const refreshHealth = useCallback(async () => {
+    try {
+      const response = await safeFetch('/api/health', { cache: 'no-store' });
+      const data = await parseApiResponse<HealthResponse>(response);
+      setHealth(data);
+      setHealthError(null);
+    } catch (err) {
+      setHealth(null);
+      setHealthError(
+        err instanceof Error ? err.message : 'Unable to reach /api/health.'
+      );
+    }
   }, []);
 
   const ensureCsrfToken = useCallback(
-    async (currentToken: string | null): Promise<string> => {
-      if (currentToken) {
-        return currentToken;
+    async (forceRefresh = false): Promise<string> => {
+      if (csrfToken && !forceRefresh) {
+        return csrfToken;
       }
-      return requestCsrfToken();
+      const headers = new Headers({ Accept: 'application/json' });
+      if (sandboxTokenRef.current) {
+        headers.set('X-Sandbox-Session', sandboxTokenRef.current);
+      }
+      const response = await safeFetch('/api/auth/csrf', {
+        method: 'GET',
+        credentials: 'include',
+        headers
+      });
+      const data = await parseApiResponse<{ csrfToken: string }>(response);
+      setCsrfToken(data.csrfToken);
+      return data.csrfToken;
     },
-    [requestCsrfToken]
+    [csrfToken]
   );
+
+  const refreshSession = useCallback(async (): Promise<LoginResult | null> => {
+    try {
+      const headers = new Headers({ Accept: 'application/json' });
+      if (sandboxTokenRef.current) {
+        headers.set('X-Sandbox-Session', sandboxTokenRef.current);
+      }
+      const response = await safeFetch('/api/auth/me', {
+        method: 'GET',
+        credentials: 'include',
+        headers
+      });
+
+      if (response.status === 401) {
+        setSandboxToken(null);
+        setUser(null);
+        setMemberships([]);
+        setCsrfToken(null);
+        setStatus('unauthenticated');
+        return null;
+      }
+
+      const data = await parseApiResponse<{
+        user: AuthenticatedUserProfile;
+        memberships: MembershipSummary[];
+        csrfToken: string;
+        sandboxSessionToken?: string;
+      }>(response);
+      if (data.sandboxSessionToken) {
+        setSandboxToken(data.sandboxSessionToken);
+      }
+      setUser(data.user);
+      setMemberships(data.memberships);
+      setCsrfToken(data.csrfToken);
+      setStatus('authenticated');
+      return { user: data.user, memberships: data.memberships };
+    } catch {
+      setUser(null);
+      setMemberships([]);
+      setCsrfToken(null);
+      setStatus('unauthenticated');
+      return null;
+    }
+  }, [setSandboxToken]);
+
+  useEffect(() => {
+    void refreshHealth();
+    void refreshSession();
+  }, [refreshHealth, refreshSession]);
 
   const apiFetch = useCallback(
     async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
       const method = (init.method ?? 'GET').toUpperCase();
-      const isStateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+      const isMutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
 
-      const send = async (token: string | null): Promise<Response> => {
-        const headers = new Headers(init.headers);
-
+      const performRequest = async (tokenOverride?: string) => {
+        const headers = new Headers(init.headers ?? {});
+        headers.set('Accept', 'application/json');
+        if (sandboxTokenRef.current) {
+          headers.set('X-Sandbox-Session', sandboxTokenRef.current);
+        }
         if (init.body && !headers.has('Content-Type')) {
           headers.set('Content-Type', 'application/json');
         }
-
-        if (isStateChanging) {
-          headers.set('X-CSRF-Token', await ensureCsrfToken(token));
+        if (isMutating) {
+          const activeToken = tokenOverride ?? (await ensureCsrfToken());
+          headers.set('X-CSRF-Token', activeToken);
         }
-
         return safeFetch(path, {
           ...init,
           method,
-          headers,
-          credentials: 'include'
+          credentials: 'include',
+          headers
         });
       };
 
-      let response = await send(csrfToken);
+      let response = await performRequest();
 
-      if (isStateChanging && response.status === 403) {
-        // The token can go stale when the session is rotated elsewhere (another
-        // tab logs in or out). Refresh it once and retry before surfacing an error.
+      if (isMutating && response.status === 403) {
         const errorCode = await readApiErrorCode(response.clone());
         if (errorCode === 'CSRF_INVALID' || errorCode === 'CSRF_MISSING') {
-          const freshToken = await requestCsrfToken();
-          response = await send(freshToken);
+          const freshToken = await ensureCsrfToken(true);
+          response = await performRequest(freshToken);
         }
       }
 
-      if (response.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/me') {
+      if (response.status === 401) {
+        setSandboxToken(null);
         setUser(null);
+        setMemberships([]);
         setCsrfToken(null);
         setStatus('unauthenticated');
       }
 
       return parseApiResponse<T>(response);
     },
-    [csrfToken, ensureCsrfToken, requestCsrfToken]
+    [ensureCsrfToken, setSandboxToken]
   );
 
-  const refreshSession = useCallback(async (): Promise<AuthenticatedUserProfile | null> => {
-    try {
-      const response = await safeFetch('/api/auth/me', {
-        method: 'GET',
-        credentials: 'include'
-      });
-      if (response.status === 401) {
-        setUser(null);
-        setCsrfToken(null);
-        setStatus('unauthenticated');
-        return null;
-      }
-      const data = await parseApiResponse<{
-        user: AuthenticatedUserProfile;
-        csrfToken: string;
-      }>(response);
-      setUser(data.user);
-      setCsrfToken(data.csrfToken);
-      setStatus('authenticated');
-      return data.user;
-    } catch {
-      setUser(null);
-      setStatus('unauthenticated');
-      return null;
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshSession();
-  }, [refreshSession]);
-
   const login = useCallback(
-    async (email: string, password: string): Promise<AuthenticatedUserProfile> => {
+    async (email: string, password: string): Promise<LoginResult> => {
       const data = await apiFetch<{
         user: AuthenticatedUserProfile;
+        memberships: MembershipSummary[];
         csrfToken: string;
+        sandboxSessionToken?: string;
       }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password })
       });
+      if (data.sandboxSessionToken) {
+        setSandboxToken(data.sandboxSessionToken);
+      }
       setUser(data.user);
+      setMemberships(data.memberships);
       setCsrfToken(data.csrfToken);
       setStatus('authenticated');
-      return data.user;
+      return { user: data.user, memberships: data.memberships };
     },
-    [apiFetch]
+    [apiFetch, setSandboxToken]
   );
 
-  const register = useCallback(
-    async (payload: RegisterPayload): Promise<AuthenticatedUserProfile> => {
-      const data = await apiFetch<{
-        user: AuthenticatedUserProfile;
-        csrfToken: string;
-      }>('/api/auth/register', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
+  const registerStudent = useCallback(
+    async (
+      payload: StudentRegistrationPayload
+    ): Promise<StudentRegistrationResponse> => {
+      const data = await apiFetch<StudentRegistrationResponse>(
+        '/api/student/register',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        }
+      );
+      if (data.sandboxSessionToken) {
+        setSandboxToken(data.sandboxSessionToken);
+      }
       setUser(data.user);
+      setMemberships(data.memberships);
       setCsrfToken(data.csrfToken);
       setStatus('authenticated');
-      return data.user;
+      return data;
     },
-    [apiFetch]
+    [apiFetch, setSandboxToken]
   );
 
   const logout = useCallback(async (): Promise<void> => {
@@ -293,24 +359,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({})
       });
     } finally {
+      setSandboxToken(null);
       setUser(null);
+      setMemberships([]);
       setCsrfToken(null);
       setStatus('unauthenticated');
     }
-  }, [apiFetch]);
+  }, [apiFetch, setSandboxToken]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
       user,
+      memberships,
       csrfToken,
+      health,
+      healthError,
+      refreshHealth,
       login,
-      register,
+      registerStudent,
       logout,
       refreshSession,
       apiFetch
     }),
-    [status, user, csrfToken, login, register, logout, refreshSession, apiFetch]
+    [
+      status,
+      user,
+      memberships,
+      csrfToken,
+      health,
+      healthError,
+      refreshHealth,
+      login,
+      registerStudent,
+      logout,
+      refreshSession,
+      apiFetch
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -319,19 +404,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    throw new Error('useAuth must be used inside an AuthProvider');
   }
   return ctx;
-}
-
-export function getDefaultRouteForRole(role: UserRole): string {
-  switch (role) {
-    case 'ADMIN':
-      return '/admin';
-    case 'BUSINESS_OWNER':
-      return '/business';
-    case 'CUSTOMER':
-    default:
-      return '/account';
-  }
 }
