@@ -1779,3 +1779,37 @@ code,
     border-radius: 0;
   }
 }
+
+.static-preview-banner {
+  background: #0f2233;
+  color: #f4f7f9;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.static-preview-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 8px 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.static-reset-btn {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.static-reset-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+

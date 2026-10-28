@@ -11,6 +11,7 @@ import type {
   HealthResponse,
   MembershipSummary
 } from './types';
+import { transportFetch } from './runtimeEnv';
 
 export interface ApiErrorDetail {
   path: Array<string | number>;
@@ -62,7 +63,7 @@ const NETWORK_ERROR_MESSAGE =
 
 async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(input, init);
+    return await transportFetch(input, init);
   } catch {
     throw new ApiRequestError(0, 'NETWORK_ERROR', NETWORK_ERROR_MESSAGE);
   }

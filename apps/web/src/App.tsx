@@ -22,6 +22,7 @@ import { BrandMark } from './BrandMark';
 import { LandingPage } from './LandingPage';
 import { WorkspacePage } from './WorkspacePage';
 import { GuardianReportCardPage, StaffReportCardPage } from './ReportCardPage';
+import { getBaseUrl, isStaticPagesSandbox, transportFetch } from './runtimeEnv';
 import type { SandboxPersonasResponse } from './types';
 import { formatSchoolRole } from './workflowRules';
 
@@ -73,7 +74,7 @@ function LoginPage() {
     let active = true;
     void (async () => {
       try {
-        const res = await fetch('/api/sandbox/personas', { cache: 'no-store' });
+        const res = await transportFetch('/api/sandbox/personas', { cache: 'no-store' });
         if (!res.ok) return;
         const payload = (await res.json()) as SandboxPersonasResponse;
         if (active) setSandboxData(payload);
@@ -288,12 +289,38 @@ function ShellContent() {
 
   const primaryRoleLabel =
     memberships[0] ? formatSchoolRole(memberships[0].role) : 'Authenticated';
+  const baseUrl = getBaseUrl();
+  const staticPagesMode = isStaticPagesSandbox();
+
+  const handleResetStaticDemo = async () => {
+    const { resetStaticSandboxState } = await import('./staticSandboxApi');
+    resetStaticSandboxState();
+    window.location.href = `${baseUrl}login`;
+  };
 
   return (
     <div className="app-frame">
       <a className="skip-link" href="#main-content">
         Skip to main content
       </a>
+
+      {staticPagesMode ? (
+        <div className="static-preview-banner no-print" role="region" aria-label="Static sandbox notice">
+          <div className="static-preview-inner">
+            <span>
+              <strong>GitHub Pages Interactive Preview:</strong> Browser-only synthetic sandbox
+              (data stays in this tab; no backend server or real learner records are connected).
+            </span>
+            <button
+              type="button"
+              className="static-reset-btn"
+              onClick={() => void handleResetStaticDemo()}
+            >
+              Reset synthetic demo
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <header className="site-header no-print">
         <div className="header-inner">
@@ -306,13 +333,13 @@ function ShellContent() {
             aria-label="Main navigation"
             className={menuOpen ? 'site-nav open' : 'site-nav'}
           >
-            <a href="/#problems" onClick={closeMenu}>
+            <a href={`${baseUrl}#problems`} onClick={closeMenu}>
               Focus areas
             </a>
-            <a href="/#workflow" onClick={closeMenu}>
+            <a href={`${baseUrl}#workflow`} onClick={closeMenu}>
               Results workflow
             </a>
-            <a href="/#access" onClick={closeMenu}>
+            <a href={`${baseUrl}#access`} onClick={closeMenu}>
               Parent access &amp; security
             </a>
             <Link to="/workspace" onClick={closeMenu}>
@@ -403,8 +430,8 @@ function ShellContent() {
           </div>
           <div className="footer-links-col">
             <strong>Foundation Scope</strong>
-            <a href="/#problems">Problem investigation</a>
-            <a href="/#workflow">Approval workflow</a>
+            <a href={`${baseUrl}#problems`}>Problem investigation</a>
+            <a href={`${baseUrl}#workflow`}>Approval workflow</a>
             <Link to="/workspace">Synthetic workspace</Link>
           </div>
           <div className="footer-notice-col">

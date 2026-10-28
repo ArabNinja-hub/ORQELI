@@ -549,8 +549,10 @@ export function createApp(options: CreateAppOptions = {}) {
 export const app = createApp();
 
 if (process.env.NODE_ENV !== 'test') {
-  const server = app.listen(env.PORT, '0.0.0.0', () =>
-    console.info(`ORQELI Education API listening on ${env.PORT} (${env.DATA_STORE_MODE})`)
+  const server = app.listen(env.PORT, env.HOST, () =>
+    console.info(
+      `ORQELI Education API listening on ${env.HOST}:${env.PORT} (${env.DATA_STORE_MODE})`
+    )
   );
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
