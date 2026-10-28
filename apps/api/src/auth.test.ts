@@ -267,3 +267,104 @@ test('production session configuration prohibits MemoryStore and enforces Secure
     /prohibited in production/
   );
 });
+
+test('embedded sandbox preview iframe authenticates without third-party cookies while postgres mode ignores sandbox header', async () => {
+  const sandboxConfig = envSchema.parse({
+    NODE_ENV: 'development',
+    DATA_STORE_MODE: 'memory-sandbox',
+    DATABASE_URL: 'postgresql://orqeli:placeholder@localhost:5432/orqeli',
+    SESSION_SECRET: 'sandbox-only-secret-that-is-at-least-thirty-two-chars',
+    WEB_ORIGIN
+  });
+  const repo = new InMemoryEducationRepository();
+  const passwordHash = await hashPassword('CorrectPass123!');
+  const school = repo.seedSchool({
+    id: 'sch_iframe_1',
+    code: 'SYN-IFR-01',
+    name: 'Iframe Preview School (Synthetic)',
+    sector: 'GOVERNMENT',
+    province: 'Lusaka',
+    district: 'Lusaka'
+  });
+  const teacher = repo.seedUser({
+    id: 'usr_iframe_teacher',
+    email: 'iframe.teacher@synthetic.orqeli.invalid',
+    name: 'Iframe Synthetic Teacher',
+    passwordHash,
+    status: 'ACTIVE'
+  });
+  repo.seedMembership({
+    schoolId: school.id,
+    userId: teacher.id,
+    role: 'TEACHER'
+  });
+
+  const sandboxApp = createApp({ config: sandboxConfig, repository: repo });
+  const srv = sandboxApp.listen(0, '127.0.0.1');
+  activeServers.push(srv);
+  await new Promise<void>((resolve) => srv.once('listening', resolve));
+  const iframeUrl = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+
+  // 1. Fetch anonymous CSRF token and log in with W3C iframe `Sec-Fetch-Site: cross-site`
+  //    + matching `Origin` AND drop all cookies afterwards.
+  const csrfRes = await fetch(`${iframeUrl}/api/auth/csrf`, {
+    headers: { origin: WEB_ORIGIN, 'sec-fetch-site': 'cross-site' }
+  });
+  const { csrfToken: anonCsrf } = (await csrfRes.json()) as { csrfToken: string };
+
+  // Evil origin with Sec-Fetch-Site: cross-site is still strictly blocked.
+  const evilLogin = await fetch(`${iframeUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin: 'https://evil.example',
+      'sec-fetch-site': 'cross-site',
+      'x-csrf-token': anonCsrf
+    },
+    body: JSON.stringify({
+      email: 'iframe.teacher@synthetic.orqeli.invalid',
+      password: 'CorrectPass123!'
+    })
+  });
+  assert.equal(evilLogin.status, 403);
+
+  // Same-origin iframe login succeeds and returns sandboxSessionToken.
+  const loginRes = await fetch(`${iframeUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin: WEB_ORIGIN,
+      'sec-fetch-site': 'cross-site',
+      'x-csrf-token': anonCsrf
+    },
+    body: JSON.stringify({
+      email: 'iframe.teacher@synthetic.orqeli.invalid',
+      password: 'CorrectPass123!'
+    })
+  });
+  assert.equal(loginRes.status, 200);
+  const loginBody = (await loginRes.json()) as {
+    csrfToken: string;
+    sandboxSessionToken?: string;
+  };
+  assert.ok(loginBody.sandboxSessionToken);
+
+  // 2. Subsequent `/api/auth/me` and school overview WITH ZERO COOKIES succeed via X-Sandbox-Session.
+  const meWithoutCookies = await fetch(`${iframeUrl}/api/auth/me`, {
+    headers: { 'x-sandbox-session': loginBody.sandboxSessionToken! }
+  });
+  assert.equal(meWithoutCookies.status, 200);
+
+  const overviewWithoutCookies = await fetch(`${iframeUrl}/api/schools/sch_iframe_1/overview`, {
+    headers: { 'x-sandbox-session': loginBody.sandboxSessionToken! }
+  });
+  assert.equal(overviewWithoutCookies.status, 200);
+
+  // 3. Standard postgres-mode harness ignores X-Sandbox-Session completely.
+  const { baseUrl: pgModeUrl } = await setupAuthHarness();
+  const ignoredInPostgres = await fetch(`${pgModeUrl}/api/auth/me`, {
+    headers: { 'x-sandbox-session': loginBody.sandboxSessionToken! }
+  });
+  assert.equal(ignoredInPostgres.status, 401);
+});
+

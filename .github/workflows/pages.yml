@@ -20,8 +20,6 @@ jobs:
   build:
     name: Build static preview
     runs-on: ubuntu-latest
-    outputs:
-      pages_build_type: ${{ steps.pages_mode.outputs.build_type }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,27 +40,10 @@ jobs:
           cp apps/web/dist/index.html apps/web/dist/404.html
           touch apps/web/dist/.nojekyll
 
-      - name: Check repository GitHub Pages source mode
-        id: pages_mode
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          MODE=$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq '.build_type' 2>/dev/null || echo "unconfigured")
-          echo "build_type=${MODE}" >> "$GITHUB_OUTPUT"
-          if [ "${MODE}" != "workflow" ]; then
-            {
-              echo "### GitHub Pages source switch needed (one-time repo setting)"
-              echo " Static bundle built and verified cleanly."
-              echo "To publish live to \`https://arabninja-hub.github.io/ORQELI/\`, open **Settings → Pages** (\`https://github.com/${GITHUB_REPOSITORY}/settings/pages\`) and set **Build and deployment → Source** to **GitHub Actions**, then re-run or push."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       - name: Configure Pages
-        if: steps.pages_mode.outputs.build_type == 'workflow'
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
-        if: steps.pages_mode.outputs.build_type == 'workflow'
         uses: actions/upload-pages-artifact@v3
         with:
           path: apps/web/dist
@@ -70,7 +51,7 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     needs: build
-    if: needs.build.outputs.pages_build_type == 'workflow'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

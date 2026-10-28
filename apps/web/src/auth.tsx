@@ -4,6 +4,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState
 } from 'react';
 import type {
@@ -60,6 +61,33 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 const NETWORK_ERROR_MESSAGE =
   'The ORQELI Education API could not be reached. Check that the API is running and that the web server proxies /api to the API port.';
+
+const SANDBOX_TOKEN_STORAGE_KEY = 'orqeli.sandbox_session_token.v1';
+
+function readStoredSandboxToken(): string | null {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      return sessionStorage.getItem(SANDBOX_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage access restrictions inside strict iframes.
+  }
+  return null;
+}
+
+function writeStoredSandboxToken(token: string | null): void {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      if (token) {
+        sessionStorage.setItem(SANDBOX_TOKEN_STORAGE_KEY, token);
+      } else {
+        sessionStorage.removeItem(SANDBOX_TOKEN_STORAGE_KEY);
+      }
+    }
+  } catch {
+    // Ignore storage access restrictions inside strict iframes.
+  }
+}
 
 async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   try {
@@ -133,6 +161,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const sandboxTokenRef = useRef<string | null>(readStoredSandboxToken());
+
+  const setSandboxToken = useCallback((token: string | null) => {
+    sandboxTokenRef.current = token;
+    writeStoredSandboxToken(token);
+  }, []);
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -153,10 +187,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (csrfToken && !forceRefresh) {
         return csrfToken;
       }
+      const headers = new Headers({ Accept: 'application/json' });
+      if (sandboxTokenRef.current) {
+        headers.set('X-Sandbox-Session', sandboxTokenRef.current);
+      }
       const response = await safeFetch('/api/auth/csrf', {
         method: 'GET',
         credentials: 'include',
-        headers: { Accept: 'application/json' }
+        headers
       });
       const data = await parseApiResponse<{ csrfToken: string }>(response);
       setCsrfToken(data.csrfToken);
@@ -167,13 +205,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshSession = useCallback(async (): Promise<LoginResult | null> => {
     try {
+      const headers = new Headers({ Accept: 'application/json' });
+      if (sandboxTokenRef.current) {
+        headers.set('X-Sandbox-Session', sandboxTokenRef.current);
+      }
       const response = await safeFetch('/api/auth/me', {
         method: 'GET',
         credentials: 'include',
-        headers: { Accept: 'application/json' }
+        headers
       });
 
       if (response.status === 401) {
+        setSandboxToken(null);
         setUser(null);
         setMemberships([]);
         setCsrfToken(null);
@@ -185,7 +228,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user: AuthenticatedUserProfile;
         memberships: MembershipSummary[];
         csrfToken: string;
+        sandboxSessionToken?: string;
       }>(response);
+      if (data.sandboxSessionToken) {
+        setSandboxToken(data.sandboxSessionToken);
+      }
       setUser(data.user);
       setMemberships(data.memberships);
       setCsrfToken(data.csrfToken);
@@ -198,7 +245,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setStatus('unauthenticated');
       return null;
     }
-  }, []);
+  }, [setSandboxToken]);
 
   useEffect(() => {
     void refreshHealth();
@@ -213,6 +260,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const performRequest = async (tokenOverride?: string) => {
         const headers = new Headers(init.headers ?? {});
         headers.set('Accept', 'application/json');
+        if (sandboxTokenRef.current) {
+          headers.set('X-Sandbox-Session', sandboxTokenRef.current);
+        }
         if (init.body && !headers.has('Content-Type')) {
           headers.set('Content-Type', 'application/json');
         }
@@ -239,6 +289,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (response.status === 401) {
+        setSandboxToken(null);
         setUser(null);
         setMemberships([]);
         setCsrfToken(null);
@@ -247,7 +298,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return parseApiResponse<T>(response);
     },
-    [ensureCsrfToken]
+    [ensureCsrfToken, setSandboxToken]
   );
 
   const login = useCallback(
@@ -256,17 +307,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user: AuthenticatedUserProfile;
         memberships: MembershipSummary[];
         csrfToken: string;
+        sandboxSessionToken?: string;
       }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password })
       });
+      if (data.sandboxSessionToken) {
+        setSandboxToken(data.sandboxSessionToken);
+      }
       setUser(data.user);
       setMemberships(data.memberships);
       setCsrfToken(data.csrfToken);
       setStatus('authenticated');
       return { user: data.user, memberships: data.memberships };
     },
-    [apiFetch]
+    [apiFetch, setSandboxToken]
   );
 
   const logout = useCallback(async (): Promise<void> => {
@@ -276,12 +331,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({})
       });
     } finally {
+      setSandboxToken(null);
       setUser(null);
       setMemberships([]);
       setCsrfToken(null);
       setStatus('unauthenticated');
     }
-  }, [apiFetch]);
+  }, [apiFetch, setSandboxToken]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

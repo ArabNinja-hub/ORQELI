@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import type session from 'express-session';
 import cors from 'cors';
@@ -15,10 +18,12 @@ import {
 } from './authz.js';
 import {
   createPgSessionStore,
+  createSandboxSessionToken,
   createSessionMiddleware,
   createSimulatedPgPool,
   destroyAuthenticatedSession,
-  regenerateAuthenticatedSession
+  regenerateAuthenticatedSession,
+  verifySandboxSessionToken
 } from './session.js';
 import { createCsrfProtectionMiddleware, createCsrfToken } from './csrf.js';
 import {
@@ -139,7 +144,7 @@ export function createApp(options: CreateAppOptions = {}) {
     cors({
       origin: config.WEB_ORIGIN,
       credentials: true,
-      allowedHeaders: ['Content-Type', 'X-CSRF-Token']
+      allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'X-Sandbox-Session']
     })
   );
   instance.use(express.json({ limit: '32kb' }));
@@ -179,12 +184,34 @@ export function createApp(options: CreateAppOptions = {}) {
   const csrfMiddleware = createCsrfProtectionMiddleware(config);
 
   instance.use('/api', sessionMiddleware);
+
+  // In non-production `memory-sandbox` mode only, support an HMAC-signed
+  // `X-Sandbox-Session` header fallback when third-party cookies are blocked
+  // inside cross-site preview iframes.
+  if (isMemorySandbox) {
+    instance.use('/api', (req, _res, next) => {
+      if (!req.session?.userId) {
+        const rawHeader = req.headers['x-sandbox-session'];
+        const tokenValue = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+        if (typeof tokenValue === 'string' && tokenValue.length > 0) {
+          const verified = verifySandboxSessionToken(config.SESSION_SECRET, tokenValue);
+          if (verified) {
+            req.sandboxAuth = verified;
+          }
+        }
+      }
+      next();
+    });
+  }
+
   instance.use('/api', csrfMiddleware);
 
-  // Resolve the authenticated user strictly from the verified server-side session.
+  // Resolve the authenticated user strictly from the verified server-side session
+  // (or verified HMAC sandbox session in non-production memory-sandbox mode).
   instance.use('/api', async (req, res, next) => {
     try {
-      const sessionUserId = req.session?.userId;
+      const sessionUserId =
+        req.session?.userId ?? (isMemorySandbox ? req.sandboxAuth?.userId : undefined);
       if (!sessionUserId) {
         next();
         return;
@@ -208,7 +235,10 @@ export function createApp(options: CreateAppOptions = {}) {
 
   instance.get('/api/auth/csrf', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    const csrfToken = createCsrfToken(config.SESSION_SECRET, req.session?.csrfSecret);
+    const csrfToken = createCsrfToken(
+      config.SESSION_SECRET,
+      req.session?.csrfSecret ?? req.sandboxAuth?.csrfSecret
+    );
     return res.json({ csrfToken });
   });
 
@@ -261,10 +291,18 @@ export function createApp(options: CreateAppOptions = {}) {
       });
 
       const csrfToken = createCsrfToken(config.SESSION_SECRET, csrfSecret);
+      const sandboxSessionToken = isMemorySandbox
+        ? createSandboxSessionToken(config.SESSION_SECRET, {
+            userId: user.id,
+            csrfSecret,
+            ttlHours: config.SESSION_TTL_HOURS
+          })
+        : undefined;
       return res.status(200).json({
         user: toSafeUser(user),
         memberships: toSafeMemberships(user),
-        csrfToken
+        csrfToken,
+        ...(sandboxSessionToken ? { sandboxSessionToken } : {})
       });
     } catch (error) {
       return next(error);
@@ -292,11 +330,21 @@ export function createApp(options: CreateAppOptions = {}) {
 
   instance.get('/api/auth/me', requireAuth(), (req, res) => {
     res.set('Cache-Control', 'no-store');
-    const csrfToken = createCsrfToken(config.SESSION_SECRET, req.session?.csrfSecret);
+    const activeCsrfSecret = req.session?.csrfSecret ?? req.sandboxAuth?.csrfSecret;
+    const csrfToken = createCsrfToken(config.SESSION_SECRET, activeCsrfSecret);
+    const sandboxSessionToken =
+      isMemorySandbox && req.user && activeCsrfSecret
+        ? createSandboxSessionToken(config.SESSION_SECRET, {
+            userId: req.user.id,
+            csrfSecret: activeCsrfSecret,
+            ttlHours: config.SESSION_TTL_HOURS
+          })
+        : undefined;
     return res.status(200).json({
       user: req.authUser,
       memberships: req.memberships ?? [],
-      csrfToken
+      csrfToken,
+      ...(sandboxSessionToken ? { sandboxSessionToken } : {})
     });
   });
 
@@ -490,6 +538,28 @@ export function createApp(options: CreateAppOptions = {}) {
       }
     }
   );
+
+  instance.use('/api', (_req, res) =>
+    res.status(404).json({
+      error: {
+        code: 'NOT_FOUND',
+        message: 'The requested resource was not found.'
+      }
+    })
+  );
+
+  // When the web bundle has been built (`apps/web/dist/index.html`), serve static
+  // assets and SPA fallback for non-API GET requests so single-port deployments
+  // and direct API-port previews render the web client instead of a JSON 404.
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const webDistDir = path.resolve(moduleDir, '../../web/dist');
+  const webIndexHtml = path.join(webDistDir, 'index.html');
+  if (config.NODE_ENV !== 'test' && fs.existsSync(webIndexHtml)) {
+    instance.use(express.static(webDistDir));
+    instance.get(/^(?!\/api(?:\/|$)).*/, (_req, res) => {
+      res.sendFile(webIndexHtml);
+    });
+  }
 
   instance.use((_req, res) =>
     res.status(404).json({
