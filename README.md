@@ -1,149 +1,160 @@
-# ORQELI
+# ORQELI Education
 
-ORQELI is a booking marketplace foundation for local barbershops and salons, initially focused on Kitwe and Ndola, Zambia. Phase 1 sets up an independently deployable React frontend and Node API, relational data model, and responsive product shell. It intentionally does **not** implement listings, authentication, bookings, or admin operations yet.
+ORQELI Education is an early-stage education technology foundation for government, private, and community schools in Zambia.
 
-## Repository inspection / current status
+The initial problem space under active investigation is **academic records and end-of-term examination results**:
 
-The original repository had only this README and no application framework, packages, tests, or existing configuration. There was no working code to replace. This repository now uses an npm workspace monorepo with `apps/web` (React, TypeScript, Vite) and `apps/api` (Express, TypeScript, Prisma, PostgreSQL). They build and deploy independently; Vite proxies `/api` to the API during local development.
+- Recording subject marks and structured academic records by academic year, term, class, and subject.
+- Detecting missing, late, or unrecorded marks before report-card compilation stalls.
+- Supporting structured review, revision requests, and correction of results.
+- Enforcing explicit Head Teacher / School Administrator approval prior to publication.
+- Generating clean, low-ink A4 printable report cards and designing parent access that does **not** require smartphone ownership or reliable home internet.
 
-## Requirements coverage and boundaries
+> **Project Stage & Honesty Notice:** ORQELI Education is in early-stage research and foundational engineering. All demonstration schools, staff accounts, learners, and marks in this repository are **100% synthetic** (`@synthetic.orqeli.invalid` / `SYN-` identifiers). Never store real learner personally identifiable information (PII) or production secrets in this repository. ORQELI Education makes no claim of school endorsements, adoption statistics, or Ministry of Education / Examinations Council of Zambia (ECZ) approval.
 
-- Initial relational entities and roles are modeled: users (`CUSTOMER`, `BUSINESS_OWNER`, `ADMIN`), user account statuses (`ACTIVE`, `DISABLED`, `SUSPENDED`), businesses, services, working hours, bookings, administrator audit events, and PostgreSQL-backed sessions (`session`).
-- Business statuses are `PENDING`, `APPROVED`, `REJECTED`, and `SUSPENDED`; new records default to pending. Public discovery/booking access must filter for approved businesses.
-- Business records include city and location; city is free text for extensibility and indexed with status. Launch UI city choices are Kitwe and Ndola.
-- Server-verified session authentication (`express-session` + `connect-pg-simple`), Argon2id password hashing, CSRF protections, role-based access control (`requireRole`), and business-owner tenant isolation (`ownerScope`) are implemented across `/api/auth/*`, `/api/account`, `/api/owner/*`, and `/api/admin/*`. Public registration never permits creating `ADMIN` accounts, and newly registered business owners always create `PENDING` business listings subject to manual administrator review.
-- Booking data includes guest contact fields and a unique reference. Booking creation, availability calculation, transaction/concurrency protections, and confirmation are not implemented; the UI explicitly does not claim an appointment was made. For a real booking flow, revalidate approval, service duration, working hours and conflicts in a transaction. PostgreSQL exclusion constraints (with a range and `btree_gist`) are a recommended additional migration to prevent overlapping active appointments under concurrency.
-- Subscription, featured listing, payments, and commissions are intentionally out of scope.
-- API configuration is validated with Zod, response errors use a stable structure, and Helmet/CORS/request body limits are configured. Add request schemas and rate limiting before public mutation endpoints.
+---
 
-See [docs/architecture.md](docs/architecture.md) for design choices and the schema/migration approach.
+## Repository Structure
 
-## Local setup (Windows 11, VS Code, PowerShell)
+This repository uses an npm workspace monorepo separating the browser client and the backend API:
 
-Prerequisites: 64-bit Windows 11, Git, Node.js 20+ (Node 22 was used for verification), npm, and PostgreSQL running locally. Docker is not required. Install PostgreSQL using the official [PostgreSQL Windows download page](https://www.postgresql.org/download/windows/), which links to the EDB installer. Select PostgreSQL Server and Command Line Tools; pgAdmin is optional. During installation, set a strong password for the `postgres` administrator, keep it private, and leave the default port `5432` unless it is already occupied. The installer registers PostgreSQL as a Windows service.
+```text
+ORQELI/
+├── apps/
+│   ├── web/                 # React 19, Vite 7, TypeScript single-page client
+│   └── api/                 # Node.js, Express 5, TypeScript, Prisma, PostgreSQL API
+├── docs/
+│   ├── architecture.md      # Deployment boundary, tenant isolation, RBAC, session/CSRF, limits
+│   └── results-workflow.md  # Domain & workflow design for the 8 candidate academic requirements
+├── .env.example             # Documented environment template (no real secrets)
+└── package.json             # Workspace scripts for dev, typecheck, test, build, and Prisma
+```
 
-1. Open the existing repository folder in VS Code (`File → Open Folder…`). Open a PowerShell terminal at the repository root (`Terminal → New Terminal`). Confirm `node --version` (20 or later) and `npm --version`, then install the locked workspace dependencies:
-   ```powershell
+> The pre-pivot business marketplace source code is preserved untouched on the `backup/pre-education-pivot-2026-10-28` branch and in Git history.
+
+---
+
+## Quick Start & Local Setup
+
+### Prerequisites
+
+- **Node.js 20+** (verified on Node.js 22) and **npm 10+**
+- **PostgreSQL 16+** for standard relational persistence (or use `npm run dev:sandbox` for zero-database synthetic evaluation during early exploration)
+
+### Option A: Standard Setup with PostgreSQL
+
+1. **Install workspace dependencies:**
+   ```bash
    npm install
    ```
-2. Confirm the database service is running. The service name varies by PostgreSQL major version:
-   ```powershell
-   Get-Service *postgres*
-   ```
-   If it is stopped, start the matching service from an elevated PowerShell: `Start-Service postgresql-x64-18` (replace `18` with the installed version). Alternatively use Windows Services or pgAdmin.
-3. Open SQL Shell (psql) from the Start menu, or in PowerShell run the installed `psql.exe` by full path, for example:
-   ```powershell
-   & "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres -h localhost -p 5432 -d postgres
-   ```
-   Replace `18` if needed; if `psql` is on PATH, `psql -U postgres -h localhost -p 5432 -d postgres` works. Enter the administrator password when prompted. In the psql prompt create a dedicated local role and database (not the `postgres` superuser):
-   ```sql
-   CREATE ROLE orqeli LOGIN;
-   CREATE DATABASE orqeli OWNER orqeli;
-   \password orqeli
-   ```
-   `\password` prompts for the new role password without putting it in the PowerShell command history. Exit with `\q`.
-4. Copy the example config to the ignored local environment file and edit it in VS Code:
-   ```powershell
-   Copy-Item .env.example .env
-   code .env
-   ```
-   Set `DATABASE_URL` to `postgresql://orqeli:URL_ENCODED_PASSWORD@localhost:5432/orqeli?schema=public`. If the password has URL-reserved characters, percent-encode them. Set `SESSION_SECRET` to a private random value of at least 32 characters. For example, generate 32 cryptographically random bytes in PowerShell and Base64-encode them:
-   ```powershell
-   $bytes = New-Object byte[] 32
-   $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-   $rng.GetBytes($bytes)
-   $rng.Dispose()
-   [Convert]::ToBase64String($bytes)
-   ```
-   Paste the output as the quoted `SESSION_SECRET` value in `.env`. Keep `.env` local; `.gitignore` excludes `.env` and `.env.*` while allowing `.env.example`. Never paste real credentials into source files or commit them.
 
-   Keep the API and the Vite dev proxy on the same port. `PORT` in the root `.env` is read by both: the API listens on it, and the Vite `/api` proxy targets `http://127.0.0.1:$PORT` (`VITE_API_PROXY_TARGET` overrides the proxy target for a non-default host). Do not hardcode a port in `apps/web/vite.config.ts`. The API loads `apps/api/.env` first and then the repository-root `.env`, so `npm run dev` (which runs each workspace script with the workspace as its working directory) picks up the same configuration as a terminal started at the repository root.
-5. With the terminal still at the repository root, validate and generate the Prisma client, then apply the committed migrations:
-   ```powershell
+2. **Create a fresh PostgreSQL database:**
+   *(If you previously ran pre-pivot ORQELI migrations locally, create a new database such as `orqeli_education` rather than applying education migrations onto old tables.)*
+   ```sql
+   CREATE ROLE orqeli LOGIN PASSWORD 'replace_with_local_password';
+   CREATE DATABASE orqeli_education OWNER orqeli;
+   ```
+
+3. **Configure `.env` at the repository root:**
+   ```bash
+   cp .env.example .env
+   ```
+   Update `DATABASE_URL` and set `SESSION_SECRET` to a random value of at least 32 characters (for example `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`).
+
+4. **Validate Prisma, generate the client, and apply migrations:**
+   ```bash
    npm run db:validate
    npm run db:generate
    npm run db:deploy
    ```
-   Expected: validation says the schema is valid; generation reports a Prisma Client generated using the installed Prisma version; `migrate deploy` applies the committed migrations under `apps/api/prisma/migrations/` (`init` and `auth_and_sessions`) and updates `_prisma_migrations`. Use `npm run db:migrate -- --name <name>` only when you intentionally change `apps/api/prisma/schema.prisma` and need a new migration generated; it applies migrations too. Inspect `apps/api/prisma/migrations/` before committing; do not hand-write migration SQL to bypass Prisma.
-6. Confirm migration state and inspect tables:
-   ```powershell
-   npm run db:status
-   & "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U orqeli -h localhost -p 5432 -d orqeli -c "\dt"
-   & "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U orqeli -h localhost -p 5432 -d orqeli -c "SELECT migration_name, finished_at FROM _prisma_migrations ORDER BY started_at;"
+
+5. **(Optional) Seed synthetic demonstration schools & roles into local PostgreSQL:**
+   ```bash
+   npm run db:seed-synthetic
    ```
-   Use the installed version path if not 18. Expected: Prisma reports the database schema is up to date; `\dt` lists application tables and `_prisma_migrations`; the query lists the successful migration with a non-null `finished_at`.
-7. Start the app and run the foundation checks:
-   ```powershell
+   *(Refuses to run when `NODE_ENV=production`.)*
+
+6. **Start both the web client and API:**
+   ```bash
    npm run dev
-   npm run test
-   npm run typecheck
-   npm run build
    ```
-   Web: http://localhost:5173 · API liveness: `http://localhost:$PORT/api/health` (`PORT` from `.env`, default `4000`).
+   - Web application: `http://localhost:5173`
+   - API health endpoint: `http://localhost:4000/api/health` (proxied at `http://localhost:5173/api/health`)
 
-   The web app talks to the API through the Vite `/api` proxy. Checking `http://localhost:4000/api/health` directly only proves the API process is alive; `http://localhost:5173/api/health` proves the browser path works too. If only the direct URL works, `PORT` and the proxy target disagree. The UI now reports this explicitly (for example `The ORQELI API returned an unexpected response (HTTP 500)`).
+### Option B: Zero-Database Synthetic Sandbox Mode (Development Only)
 
-   `npm test` runs both suites (API and web) and needs no database. To exercise the real PostgreSQL code paths (registration, login, logout, roles, CSRF, and the `session` table written by `connect-pg-simple`), run the migration-backed flow check after `npm run db:deploy`; it creates and then deletes its own test rows:
-   ```powershell
-   npm run db:verify-flow -w @orqeli/api
-   ```
-   `.github/workflows/ci.yml` runs the same steps — install, `db:validate`, `db:generate`, typecheck, `db:deploy`, `prisma migrate diff` drift check, tests, the flow check and the production build — against an ephemeral PostgreSQL 16 service on every push and pull request, so these checks do not depend on a local database.
+To inspect the landing page, multi-role school workspace, mark-entry validation, approval pipeline, printable A4 report cards, and guardian isolation without running PostgreSQL locally:
 
-### Prisma download/TLS troubleshooting
+```bash
+npm run dev:sandbox
+```
 
-A previous schema-engine attempt failed exactly with: `request to https://binaries.prisma.sh/all_commits/c2990dca591cba766e3b7ef5d9e8a84796e47ab7/debian-openssl-3.0.x/schema-engine.gz.sha256 failed, reason: Client network socket disconnected before secure TLS connection was established`. This is an engine-download/network problem, **not evidence of a schema error**. First check system date/time, internet connectivity, VPN/proxy/firewall settings, and whether HTTPS to `binaries.prisma.sh` is permitted. Retry `npm run db:validate`; Prisma's `prisma version` or `prisma debug` can help report the platform/engine resolution. On a managed network, ask IT to allow the Prisma engine host or configure the organization's trusted HTTPS proxy correctly. Do not disable TLS verification, use insecure HTTP, download a random engine binary, or fabricate migration SQL. Once access is restored, rerun the commands in step 5 and retain the actual command output.
+This starts `@orqeli/api` with `DATA_STORE_MODE=memory-sandbox` (pre-loaded with clearly marked `[Synthetic Demo]` records) alongside `@orqeli/web`. Note that `DATA_STORE_MODE=memory-sandbox` is strictly rejected by runtime configuration validation when `NODE_ENV=production`.
 
-### "The request could not be completed." / HTTP 500 when registering
+---
 
-That message is the UI fallback for a non-JSON response. In development the usual cause is that the browser request went through the Vite proxy but the API was not reachable on the proxied port, so Vite answered `500 text/plain` (Vite logs `http proxy error ... ECONNREFUSED`). Check in this order: `npm run db:generate` has been run (the API exits on start if the Prisma client is not generated); the API terminal shows `ORQELI API listening on <port>`; that port equals `PORT` in the root `.env`; and `http://localhost:5173/api/health` returns `{"status":"ok"}`. The proxy now derives its target from `PORT`, so a stale hardcoded port cannot desynchronise it.
+## Available Scripts
 
-`/api/health` is a process/liveness check and intentionally does not verify PostgreSQL. The API creates the Prisma client lazily and does not connect on startup; missing required environment values fail fast. Database-backed routes currently surface connection failures as a generic `500 INTERNAL_ERROR` (the details are logged server-side, not returned).
+| Command | Description |
+|---|---|
+| `npm run dev` | Starts Vite (`apps/web`) and Express (`apps/api`, PostgreSQL mode) concurrently |
+| `npm run dev:sandbox` | Starts Vite and Express in non-production in-memory synthetic sandbox mode |
+| `npm run typecheck` | Runs TypeScript `--noEmit` checks across `@orqeli/api` and `@orqeli/web` |
+| `npm test` | Runs automated API and web unit/integration test suites (no live DB required) |
+| `npm run build` | Compiles `@orqeli/api` and builds the production `@orqeli/web` bundle |
+| `npm run db:validate` | Validates `apps/api/prisma/schema.prisma` |
+| `npm run db:generate` | Generates the typed Prisma Client |
+| `npm run db:deploy` | Applies committed Prisma migrations to PostgreSQL |
+| `npm run db:migrate -- --name <name>` | Creates and applies a new Prisma migration during schema changes |
+| `npm run db:status` | Checks PostgreSQL migration status |
+| `npm run db:seed-synthetic` | Populates synthetic demo schools/users into local PostgreSQL (blocked in production) |
+| `npm run db:verify-flow -w @orqeli/api` | Runs end-to-end verification against a live PostgreSQL database |
 
-## API Endpoints
+---
 
-### Health
-- `GET /api/health` — Process liveness check (`{ "status": "ok" }`).
+## Environment Variables
 
-### Authentication & Session Management
-- `GET /api/auth/csrf` — Returns a signed CSRF token (`{ "csrfToken": "..." }`). Every state-changing request (`POST`, `PUT`, `PATCH`, `DELETE`) must send it back in the `X-CSRF-Token` header; a missing token is rejected with `403 CSRF_MISSING` and an invalid/expired one with `403 CSRF_INVALID`. The token is bound to the current session once authenticated, so `curl`/script clients must fetch a token with the same cookie they use for the mutation.
-- `POST /api/auth/register` — Registers a `CUSTOMER` or `BUSINESS_OWNER` (with initial `PENDING` business profile). Prohibits `ADMIN` registration (`403 FORBIDDEN`), normalizes emails, hashes passwords with Argon2id, regenerates the session ID, and returns `201` with `{ user, csrfToken }`.
-- `POST /api/auth/login` — Authenticates email and password using Argon2, rejects `DISABLED` or `SUSPENDED` accounts (`403`), regenerates the session ID to prevent session fixation, and returns `200` with `{ user, csrfToken }`.
-- `POST /api/auth/logout` — Destroys the server-side PostgreSQL session, clears the session cookie, and returns `200` with `{ "status": "ok" }`.
-- `GET /api/auth/me` — Returns `200` with the authenticated user's safe profile (`{ user, csrfToken }`) or `401 UNAUTHENTICATED`.
+| Variable | Required | Default | Description |
+|---|---:|---|---|
+| `DATABASE_URL` | Yes | — | PostgreSQL connection URL (`postgresql://...`) |
+| `SESSION_SECRET` | Yes | — | Secret (32+ chars) signing session cookies and HMAC CSRF tokens; example placeholders are rejected in `production` |
+| `PORT` | No | `4000` | Port `@orqeli/api` listens on; Vite dev server proxies `/api` to `http://127.0.0.1:$PORT` |
+| `WEB_ORIGIN` | No | `http://localhost:5173` | Allowed browser origin for CORS and CSRF `Origin`/`Referer` verification |
+| `SESSION_COOKIE_NAME` | No | `orqeli.sid` | Name of the `HttpOnly` session cookie |
+| `SESSION_TTL_HOURS` | No | `24` | Session lifetime (`1`–`720` hours) |
+| `SESSION_COOKIE_SAMESITE` | No | `lax` | `lax`, `strict`, or `none` (`none` requires `NODE_ENV=production`) |
+| `TRUST_PROXY` | No | `false` | Trust reverse-proxy headers (`X-Forwarded-Proto`); automatically enabled in `production` |
+| `DATA_STORE_MODE` | No | `postgres` | `postgres` or `memory-sandbox` (`memory-sandbox` is blocked when `NODE_ENV=production`) |
+| `NODE_ENV` | No | `development` | `development`, `test`, or `production` |
 
-### Role-Protected & Owner-Scoped Endpoints
-- `GET /api/account` — Authenticated customer/user profile and account bookings (`CUSTOMER`, `BUSINESS_OWNER`, `ADMIN`).
-- `GET /api/owner/businesses` — Lists businesses owned by the authenticated `BUSINESS_OWNER` (scoped via `ownerScope`).
-- `POST /api/owner/businesses` — Submits a new business onboarding application (`status: PENDING`) for the authenticated `BUSINESS_OWNER`.
-- `GET /api/owner/businesses/:businessId` — Retrieves a business owned by the authenticated `BUSINESS_OWNER` (`404` if not owned).
-- `PATCH /api/owner/businesses/:businessId` — Updates allowed profile fields on a business owned by the authenticated `BUSINESS_OWNER` (rejects attempts to change `status` or `ownerId`).
-- `GET /api/admin/businesses` — Lists business applications for `ADMIN` review (optional `?status=` filter).
-- `PATCH /api/admin/businesses/:businessId/status` — Updates a business review status (`PENDING`, `APPROVED`, `REJECTED`, `SUSPENDED`) as `ADMIN` and records an `AuditEvent`.
-- `GET /api/admin/users` — Lists safe user profiles for `ADMIN` oversight (never exposes `passwordHash`).
-- `PATCH /api/admin/users/:userId/status` — Updates a user account status (`ACTIVE`, `DISABLED`, `SUSPENDED`) as `ADMIN` and records an `AuditEvent`.
+---
 
-## Environment variables
+## Core API Endpoints
 
-| Name | Required | Description |
-|---|---:|---|
-| `DATABASE_URL` | yes | PostgreSQL URL, including database and schema |
-| `SESSION_SECRET` | yes | Cryptographically strong secret for signing session cookies and CSRF tokens; 32+ chars |
-| `PORT` | no | API listen port; defaults to `4000` |
-| `WEB_ORIGIN` | no | Exact browser origin allowed by CORS and the CSRF origin check; defaults to `http://localhost:5173`. In production set it to the public HTTPS origin (for example `https://orqeli.zm`). |
-| `SESSION_COOKIE_NAME` | no | Session cookie name; defaults to `orqeli.sid` |
-| `SESSION_TTL_HOURS` | no | Session lifetime in hours (`1`–`720`); defaults to `24` |
-| `SESSION_COOKIE_SAMESITE` | no | Cookie SameSite policy (`lax`, `strict`, `none`); defaults to `lax`. A cross-site deployment (web and API on different origins) needs `none`, which is only accepted when `NODE_ENV=production` so the `Secure` flag is guaranteed. |
-| `TRUST_PROXY` | no | Trust reverse proxy `X-Forwarded-Proto` header (`true`/`false`); defaults to `false` (enabled automatically in `production`) |
-| `NODE_ENV` | no | `development`, `test`, or `production`; defaults to `development`. `production` sets `Secure` session cookies (the site must be served over HTTPS, terminating TLS at a trusted proxy), refuses `MemoryStore`, rejects the example `SESSION_SECRET` placeholder, and enables `trust proxy`. |
+- `GET /api/health` — Process liveness and runtime stage check (`{ status: "ok", service: "orqeli-education-api", stage: "early-stage-foundation", sandboxMode }`).
+- `GET /api/auth/csrf` — Issues a signed CSRF token required in `X-CSRF-Token` on all `POST`/`PUT`/`PATCH`/`DELETE` requests.
+- `POST /api/auth/login` — Authenticates email/password with Argon2id, rotates session ID, and returns user + school memberships.
+- `POST /api/auth/logout` — Destroys server-side session and clears cookie.
+- `GET /api/auth/me` — Returns current session user and active school memberships.
+- `GET /api/schools/:schoolId/overview` — School academic calendar, subject allocations, and result-pack completeness summary (`STAFF` roles in `:schoolId` only).
+- `GET /api/schools/:schoolId/result-packs/:packId` — Class-term mark matrix, subject permissions, and missing-entry detector.
+- `PUT /api/schools/:schoolId/result-packs/:packId/marks` — Records/updates marks for an allocated subject teacher while pack is `DRAFT` or `NEEDS_REVISION`, writing before/after `AuditEvent` records.
+- `POST /api/schools/:schoolId/result-packs/:packId/submit` — Submits a 100%-complete result pack for review (`409 INCOMPLETE_MARKS` if any mark is missing).
+- `POST /api/schools/:schoolId/result-packs/:packId/request-revision` — Returns a `SUBMITTED` or `APPROVED` pack to `NEEDS_REVISION` with mandatory review notes (`DEPUTY_HEAD`, `HEAD_TEACHER`, `SCHOOL_ADMIN`).
+- `POST /api/schools/:schoolId/result-packs/:packId/approve` — Approves a `SUBMITTED` complete pack (`HEAD_TEACHER` or `SCHOOL_ADMIN` only).
+- `POST /api/schools/:schoolId/result-packs/:packId/publish` — Publishes an `APPROVED` pack (`409 APPROVAL_REQUIRED_BEFORE_PUBLICATION` if not yet approved).
+- `GET /api/schools/:schoolId/result-packs/:packId/report-cards/:learnerId` — Structured printable report card for `APPROVED` (staff preview) or `PUBLISHED` packs.
+- `GET /api/schools/:schoolId/guardian/results` — Returns **strictly `PUBLISHED`** report cards for learners linked to an authenticated `PARENT_GUARDIAN` in `:schoolId`.
+- `GET /api/schools/:schoolId/audit-events` — School-scoped audit log (`DEPUTY_HEAD`, `HEAD_TEACHER`, `SCHOOL_ADMIN`).
 
-## Public business discovery
+---
 
-The city-aware marketplace now reads approved businesses from the existing database:
+## Current Limitations & Further Documentation
 
-- `GET /api/businesses?city=Kitwe` — public, paginated discovery with optional `q`, `hasServices`, and `page` filters.
-- `GET /api/businesses/:businessId?city=Kitwe` — approved public profile with stored active services and prices where available.
-- Web routes: `/discover?city=Kitwe` and `/businesses/:businessId?city=Kitwe` (also supports Ndola).
+- **Ongoing discovery:** Grading scale variations across Zambian primary, junior secondary, and senior secondary levels (including ECZ division/point scales), continuous assessment weighting, and termly attendance summaries are not yet finalised and intentionally not hardcoded.
+- **No SMS/USSD gateway yet:** While learners carry a `preferredChannel` (`PRINT_REPORT`, `SMS_SUMMARY`, `GUARDIAN_PORTAL`) and report cards include a physical tear-off guardian acknowledgment slip, live telecom SMS/USSD integration is planned for a later phase after school workflow validation.
+- **Administrative provisioning:** Institutional school onboarding, bulk learner/class CSV import, password reset flows, login rate limiting, MFA, and database-level PostgreSQL Row-Level Security (RLS) policies are not yet implemented.
 
-Only approved businesses with active owners are returned; private owner/customer records are never part of public responses. **Online booking is not implemented.** No migrations or new application environment variables are needed for this read-only slice.
-
-See [Public discovery](docs/public-discovery.md) for validation rules, data visibility, setup, test commands and remaining booking/database-verification work.
+See:
+- [docs/architecture.md](docs/architecture.md) — Architecture, security boundaries, and tenant isolation model.
+- [docs/results-workflow.md](docs/results-workflow.md) — Detailed design of the 8-part examination marks and report-card workflow.

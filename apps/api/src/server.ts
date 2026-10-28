@@ -1,4 +1,3 @@
-import { discoveryQuerySchema, profileQuerySchema, publicBusinessIdSchema } from './discovery.js';
 import express from 'express';
 import type session from 'express-session';
 import cors from 'cors';
@@ -7,7 +6,13 @@ import argon2 from 'argon2';
 import { PrismaClient } from '@prisma/client';
 import { ZodError } from 'zod';
 import { env, type AppEnv } from './config.js';
-import { requireAuth, requireRole } from './authz.js';
+import {
+  APPROVAL_ROLES,
+  LEADERSHIP_ROLES,
+  STAFF_ROLES,
+  requireAuth,
+  requireSchoolRole
+} from './authz.js';
 import {
   createPgSessionStore,
   createSessionMiddleware,
@@ -17,23 +22,25 @@ import {
 } from './session.js';
 import { createCsrfProtectionMiddleware, createCsrfToken } from './csrf.js';
 import {
-  BusinessSuspendedError,
-  DuplicateFieldError,
-  InMemoryDataRepository,
-  PrismaDataRepository,
+  DomainRuleError,
+  InMemoryEducationRepository,
+  PrismaEducationRepository,
+  toSafeMemberships,
   toSafeUser,
-  type DataRepository,
-  type StoredUserRecord
+  type EducationRepository,
+  type StoredUserWithMemberships
 } from './repository.js';
 import {
-  adminBusinessStatusFilterSchema,
-  adminUpdateBusinessStatusSchema,
-  adminUpdateUserStatusSchema,
-  businessOnboardingSchema,
   loginSchema,
-  ownerBusinessUpdateSchema,
-  registerSchema
+  recordMarksSchema,
+  requestRevisionSchema,
+  resourceIdSchema
 } from './schemas.js';
+import {
+  SANDBOX_PERSONAS,
+  SYNTHETIC_SANDBOX_CREDENTIAL,
+  populateSyntheticInMemoryDataset
+} from './syntheticData.js';
 
 let prisma: PrismaClient | undefined;
 
@@ -55,7 +62,7 @@ let dummyPasswordHashPromise: Promise<string> | undefined;
 
 function getDummyPasswordHash(): Promise<string> {
   return (dummyPasswordHashPromise ??= hashPassword(
-    'orqeli-constant-time-fallback-password'
+    'orqeli-education-constant-time-fallback-password'
   ));
 }
 
@@ -71,7 +78,7 @@ export async function verifyPassword(
 }
 
 function checkAccountEligibility(
-  user: StoredUserRecord
+  user: StoredUserWithMemberships
 ): { eligible: true } | { eligible: false; code: string; message: string } {
   if (user.status === 'DISABLED' || user.status === 'SUSPENDED') {
     return {
@@ -80,37 +87,40 @@ function checkAccountEligibility(
       message: 'This account has been disabled or suspended.'
     };
   }
-  if (
-    user.role === 'BUSINESS_OWNER' &&
-    user.ownedBusinesses.length > 0 &&
-    user.ownedBusinesses.every((business) => business.status === 'SUSPENDED')
-  ) {
-    return {
-      eligible: false,
-      code: 'ACCOUNT_SUSPENDED',
-      message: 'This business account is currently suspended.'
-    };
-  }
   return { eligible: true };
 }
 
 export interface CreateAppOptions {
   config?: AppEnv;
-  repository?: DataRepository;
+  repository?: EducationRepository;
   sessionStore?: session.Store;
 }
 
 export function createApp(options: CreateAppOptions = {}) {
   const config = options.config ?? env;
-  const repository: DataRepository =
-    options.repository ??
-    (config.NODE_ENV === 'test'
-      ? new InMemoryDataRepository()
-      : new PrismaDataRepository(getPrismaClient()));
+  const isMemorySandbox =
+    config.NODE_ENV !== 'production' && config.DATA_STORE_MODE === 'memory-sandbox';
+
+  let sandboxBootstrapPromise: Promise<void> | undefined;
+  let repository: EducationRepository;
+
+  if (options.repository) {
+    repository = options.repository;
+  } else if (config.NODE_ENV === 'test') {
+    repository = new InMemoryEducationRepository();
+  } else if (isMemorySandbox) {
+    const memRepo = new InMemoryEducationRepository();
+    sandboxBootstrapPromise = hashPassword(SYNTHETIC_SANDBOX_CREDENTIAL).then((hash) => {
+      populateSyntheticInMemoryDataset(memRepo, hash);
+    });
+    repository = memRepo;
+  } else {
+    repository = new PrismaEducationRepository(getPrismaClient());
+  }
 
   const sessionStore: session.Store =
     options.sessionStore ??
-    (config.NODE_ENV === 'test'
+    (config.NODE_ENV === 'test' || isMemorySandbox
       ? createPgSessionStore(config, { pool: createSimulatedPgPool() })
       : createPgSessionStore(config));
 
@@ -120,7 +130,11 @@ export function createApp(options: CreateAppOptions = {}) {
     instance.set('trust proxy', 1);
   }
 
-  instance.use(helmet());
+  instance.use(
+    config.NODE_ENV === 'production'
+      ? helmet()
+      : helmet({ frameguard: false, contentSecurityPolicy: false })
+  );
   instance.use(
     cors({
       origin: config.WEB_ORIGIN,
@@ -130,30 +144,36 @@ export function createApp(options: CreateAppOptions = {}) {
   );
   instance.use(express.json({ limit: '32kb' }));
 
-  instance.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
+  instance.get('/api/health', (_req, res) =>
+    res.json({
+      status: 'ok',
+      service: 'orqeli-education-api',
+      stage: 'early-stage-foundation',
+      sandboxMode: isMemorySandbox
+    })
+  );
 
-  // Public reads have no session dependency and never grant a role-based approval bypass.
-  // Avoid cached listings/profiles remaining visible after suspension or rejection.
-  instance.get('/api/businesses', async (req, res, next) => {
-    res.set('Cache-Control', 'no-store');
-    try {
-      const query = discoveryQuerySchema.parse(req.query);
-      return res.json(await repository.discoverBusinesses(query));
-    } catch (error) { return next(error); }
-  });
+  if (sandboxBootstrapPromise) {
+    instance.use('/api', async (_req, _res, next) => {
+      try {
+        await sandboxBootstrapPromise;
+        next();
+      } catch (err) {
+        next(err);
+      }
+    });
+  }
 
-  instance.get('/api/businesses/:businessId', async (req, res, next) => {
-    res.set('Cache-Control', 'no-store');
-    try {
-      const id = publicBusinessIdSchema.parse(req.params.businessId);
-      const { city } = profileQuerySchema.parse(req.query);
-      const business = await repository.getPublicBusiness(id, city);
-      if (!business) return res.status(404).json({ error: {
-        code: 'NOT_FOUND', message: 'The requested business is not available.'
-      } });
-      return res.json({ business });
-    } catch (error) { return next(error); }
-  });
+  if (isMemorySandbox) {
+    instance.get('/api/sandbox/personas', (_req, res) => {
+      res.set('Cache-Control', 'no-store');
+      return res.json({
+        syntheticOnly: true,
+        credentialHint: SYNTHETIC_SANDBOX_CREDENTIAL,
+        personas: SANDBOX_PERSONAS
+      });
+    });
+  }
 
   const sessionMiddleware = createSessionMiddleware(config, sessionStore);
   const csrfMiddleware = createCsrfProtectionMiddleware(config);
@@ -171,14 +191,15 @@ export function createApp(options: CreateAppOptions = {}) {
       }
 
       const storedUser = await repository.findUserById(sessionUserId);
-      if (!storedUser || ! checkAccountEligibility(storedUser).eligible) {
+      if (!storedUser || !checkAccountEligibility(storedUser).eligible) {
         await destroyAuthenticatedSession(req, res, config);
         next();
         return;
       }
 
-      req.user = { id: storedUser.id, role: storedUser.role };
+      req.user = { id: storedUser.id, platformRole: storedUser.platformRole };
       req.authUser = toSafeUser(storedUser);
+      req.memberships = toSafeMemberships(storedUser);
       next();
     } catch (error) {
       next(error);
@@ -186,61 +207,13 @@ export function createApp(options: CreateAppOptions = {}) {
   });
 
   instance.get('/api/auth/csrf', (req, res) => {
+    res.set('Cache-Control', 'no-store');
     const csrfToken = createCsrfToken(config.SESSION_SECRET, req.session?.csrfSecret);
     return res.json({ csrfToken });
   });
 
-  instance.post('/api/auth/register', async (req, res, next) => {
-    try {
-      const rawBody =
-        req.body && typeof req.body === 'object'
-          ? (req.body as Record<string, unknown>)
-          : {};
-
-      if (
-        typeof rawBody.role === 'string' &&
-        rawBody.role.trim().toUpperCase() === 'ADMIN'
-      ) {
-        return res.status(403).json({
-          error: {
-            code: 'FORBIDDEN',
-            message: 'Administrator accounts cannot be created through public registration.'
-          }
-        });
-      }
-
-      const parsed = registerSchema.parse(rawBody);
-      const passwordHash = await hashPassword(parsed.password);
-
-      const createdUser =
-        parsed.role === 'BUSINESS_OWNER' && parsed.business
-          ? await repository.createBusinessOwnerWithBusiness({
-              name: parsed.name,
-              email: parsed.email,
-              phone: parsed.phone,
-              passwordHash,
-              business: parsed.business
-            })
-          : await repository.createCustomerUser({
-              name: parsed.name,
-              email: parsed.email,
-              phone: parsed.phone,
-              passwordHash
-            });
-
-      const csrfSecret = await regenerateAuthenticatedSession(req, createdUser.id);
-      const csrfToken = createCsrfToken(config.SESSION_SECRET, csrfSecret);
-
-      return res.status(201).json({
-        user: createdUser,
-        csrfToken
-      });
-    } catch (error) {
-      return next(error);
-    }
-  });
-
   instance.post('/api/auth/login', async (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
     try {
       const parsed = loginSchema.parse(req.body ?? {});
       const user = await repository.findUserByEmail(parsed.email);
@@ -277,17 +250,20 @@ export function createApp(options: CreateAppOptions = {}) {
       }
 
       const csrfSecret = await regenerateAuthenticatedSession(req, user.id);
-      await repository.recordAuditEvent({
-        actorId: user.id,
+      await repository.recordPlatformAuditEvent({
+        actorUserId: user.id,
         action: 'USER_LOGGED_IN',
         entityType: 'User',
         entityId: user.id,
-        metadata: { role: user.role }
+        metadata: {
+          schoolCount: user.memberships.length
+        }
       });
 
       const csrfToken = createCsrfToken(config.SESSION_SECRET, csrfSecret);
       return res.status(200).json({
         user: toSafeUser(user),
+        memberships: toSafeMemberships(user),
         csrfToken
       });
     } catch (error) {
@@ -296,14 +272,15 @@ export function createApp(options: CreateAppOptions = {}) {
   });
 
   instance.post('/api/auth/logout', async (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
     try {
-      const actorId = req.user?.id ?? req.session?.userId ?? null;
-      if (actorId) {
-        await repository.recordAuditEvent({
-          actorId,
+      const actorUserId = req.user?.id ?? req.session?.userId ?? null;
+      if (actorUserId) {
+        await repository.recordPlatformAuditEvent({
+          actorUserId,
           action: 'USER_LOGGED_OUT',
           entityType: 'User',
-          entityId: actorId
+          entityId: actorUserId
         });
       }
       await destroyAuthenticatedSession(req, res, config);
@@ -314,38 +291,72 @@ export function createApp(options: CreateAppOptions = {}) {
   });
 
   instance.get('/api/auth/me', requireAuth(), (req, res) => {
+    res.set('Cache-Control', 'no-store');
     const csrfToken = createCsrfToken(config.SESSION_SECRET, req.session?.csrfSecret);
     return res.status(200).json({
       user: req.authUser,
+      memberships: req.memberships ?? [],
       csrfToken
     });
   });
 
-  // Customer & authenticated account profile endpoint (always scoped to req.user.id)
+  // ==========================================================================
+  // School-Scoped Academic & Results Workflow Routes
+  // ==========================================================================
+
   instance.get(
-    '/api/account',
-    requireRole('CUSTOMER', 'BUSINESS_OWNER', 'ADMIN'),
+    '/api/schools/:schoolId/overview',
+    requireSchoolRole(...STAFF_ROLES),
     async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
       try {
-        const bookings = await repository.listBookingsForCustomer(req.user!.id);
-        return res.status(200).json({
-          user: req.authUser,
-          bookings
-        });
+        const overview = await repository.getSchoolOverview(req.schoolAccess!);
+        if (!overview) {
+          return res.status(404).json({
+            error: { code: 'NOT_FOUND', message: 'School overview was not found.' }
+          });
+        }
+        return res.json(overview);
       } catch (error) {
         return next(error);
       }
     }
   );
 
-  // Business owner endpoints — strictly scoped via ownerScope(req.user!)
   instance.get(
-    '/api/owner/businesses',
-    requireRole('BUSINESS_OWNER'),
+    '/api/schools/:schoolId/result-packs/:packId',
+    requireSchoolRole(...STAFF_ROLES),
     async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
       try {
-        const businesses = await repository.listBusinessesForOwner(req.user!);
-        return res.status(200).json({ businesses });
+        const packId = resourceIdSchema.parse(req.params.packId);
+        const pack = await repository.getResultPackDetail(req.schoolAccess!, packId);
+        if (!pack) {
+          return res.status(404).json({
+            error: { code: 'NOT_FOUND', message: 'Result pack was not found.' }
+          });
+        }
+        return res.json({ pack });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  instance.put(
+    '/api/schools/:schoolId/result-packs/:packId/marks',
+    requireSchoolRole('TEACHER'),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const packId = resourceIdSchema.parse(req.params.packId);
+        const parsed = recordMarksSchema.parse(req.body ?? {});
+        const pack = await repository.recordSubjectMarks(
+          req.schoolAccess!,
+          packId,
+          parsed.entries
+        );
+        return res.json({ pack });
       } catch (error) {
         return next(error);
       }
@@ -353,30 +364,64 @@ export function createApp(options: CreateAppOptions = {}) {
   );
 
   instance.post(
-    '/api/owner/businesses',
-    requireRole('BUSINESS_OWNER'),
+    '/api/schools/:schoolId/result-packs/:packId/submit',
+    requireSchoolRole(...STAFF_ROLES),
     async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
       try {
-        const rawBody =
-          req.body && typeof req.body === 'object'
-            ? (req.body as Record<string, unknown>)
-            : {};
+        const packId = resourceIdSchema.parse(req.params.packId);
+        const pack = await repository.submitResultPack(req.schoolAccess!, packId);
+        return res.json({ pack });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
 
-        if (
-          rawBody.status !== undefined &&
-          String(rawBody.status).toUpperCase() !== 'PENDING'
-        ) {
-          return res.status(403).json({
-            error: {
-              code: 'FORBIDDEN',
-              message: 'New business applications must undergo manual review and cannot bypass approval.'
-            }
-          });
-        }
+  instance.post(
+    '/api/schools/:schoolId/result-packs/:packId/request-revision',
+    requireSchoolRole(...LEADERSHIP_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const packId = resourceIdSchema.parse(req.params.packId);
+        const parsed = requestRevisionSchema.parse(req.body ?? {});
+        const pack = await repository.requestResultPackRevision(
+          req.schoolAccess!,
+          packId,
+          parsed.reviewNotes
+        );
+        return res.json({ pack });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
 
-        const parsed = businessOnboardingSchema.parse(rawBody);
-        const business = await repository.createBusinessForOwner(req.user!, parsed);
-        return res.status(201).json({ business });
+  instance.post(
+    '/api/schools/:schoolId/result-packs/:packId/approve',
+    requireSchoolRole(...APPROVAL_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const packId = resourceIdSchema.parse(req.params.packId);
+        const pack = await repository.approveResultPack(req.schoolAccess!, packId);
+        return res.json({ pack });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  instance.post(
+    '/api/schools/:schoolId/result-packs/:packId/publish',
+    requireSchoolRole(...APPROVAL_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const packId = resourceIdSchema.parse(req.params.packId);
+        const pack = await repository.publishResultPack(req.schoolAccess!, packId);
+        return res.json({ pack });
       } catch (error) {
         return next(error);
       }
@@ -384,153 +429,62 @@ export function createApp(options: CreateAppOptions = {}) {
   );
 
   instance.get(
-    '/api/owner/businesses/:businessId',
-    requireRole('BUSINESS_OWNER'),
+    '/api/schools/:schoolId/result-packs/:packId/report-cards/:learnerId',
+    requireSchoolRole(...STAFF_ROLES),
     async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
       try {
-        const business = await repository.getBusinessForOwner(
-          req.user!,
-          String(req.params.businessId)
+        const packId = resourceIdSchema.parse(req.params.packId);
+        const learnerId = resourceIdSchema.parse(req.params.learnerId);
+        const reportCard = await repository.getReportCardForStaff(
+          req.schoolAccess!,
+          packId,
+          learnerId
         );
-        if (!business) {
+        if (!reportCard) {
           return res.status(404).json({
-            error: {
-              code: 'NOT_FOUND',
-              message: 'The requested resource was not found.'
-            }
+            error: { code: 'NOT_FOUND', message: 'Report card was not found.' }
           });
         }
-        return res.status(200).json({ business });
+        return res.json({ reportCard });
       } catch (error) {
         return next(error);
       }
     }
   );
 
-  instance.patch(
-    '/api/owner/businesses/:businessId',
-    requireRole('BUSINESS_OWNER'),
-    async (req, res, next) => {
-      try {
-        const rawBody =
-          req.body && typeof req.body === 'object'
-            ? (req.body as Record<string, unknown>)
-            : {};
-
-        if ('status' in rawBody || 'ownerId' in rawBody) {
-          return res.status(403).json({
-            error: {
-              code: 'FORBIDDEN',
-              message: 'Business owners cannot modify verification status or ownership.'
-            }
-          });
-        }
-
-        const parsed = ownerBusinessUpdateSchema.parse(rawBody);
-        const updated = await repository.updateBusinessForOwner(
-          req.user!,
-          String(req.params.businessId),
-          parsed
-        );
-        if (!updated) {
-          return res.status(404).json({
-            error: {
-              code: 'NOT_FOUND',
-              message: 'The requested resource was not found.'
-            }
-          });
-        }
-        return res.status(200).json({ business: updated });
-      } catch (error) {
-        return next(error);
-      }
-    }
-  );
-
-  // Administrator endpoints — strictly restricted to ADMIN role
   instance.get(
-    '/api/admin/businesses',
-    requireRole('ADMIN'),
+    '/api/schools/:schoolId/guardian/results',
+    requireSchoolRole('PARENT_GUARDIAN'),
     async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
       try {
-        const filter = adminBusinessStatusFilterSchema.parse({
-          status:
-            typeof req.query.status === 'string' && req.query.status.length > 0
-              ? req.query.status
-              : undefined
-        });
-        const businesses = await repository.listAllBusinessesForAdmin(filter);
-        return res.status(200).json({ businesses });
+        const guardianOverview = await repository.getGuardianPublishedResults(
+          req.schoolAccess!
+        );
+        if (!guardianOverview) {
+          return res.status(404).json({
+            error: {
+              code: 'NOT_FOUND',
+              message: 'Guardian school access record was not found.'
+            }
+          });
+        }
+        return res.json(guardianOverview);
       } catch (error) {
         return next(error);
       }
     }
   );
 
-  instance.patch(
-    '/api/admin/businesses/:businessId/status',
-    requireRole('ADMIN'),
+  instance.get(
+    '/api/schools/:schoolId/audit-events',
+    requireSchoolRole(...LEADERSHIP_ROLES),
     async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
       try {
-        const parsed = adminUpdateBusinessStatusSchema.parse(req.body ?? {});
-        const updated = await repository.updateBusinessStatusForAdmin(
-          req.user!,
-          String(req.params.businessId),
-          parsed.status
-        );
-        if (!updated) {
-          return res.status(404).json({
-            error: {
-              code: 'NOT_FOUND',
-              message: 'The requested resource was not found.'
-            }
-          });
-        }
-        return res.status(200).json({ business: updated });
-      } catch (error) {
-        return next(error);
-      }
-    }
-  );
-
-  instance.get('/api/admin/users', requireRole('ADMIN'), async (_req, res, next) => {
-    try {
-      const users = await repository.listAllUsersForAdmin();
-      return res.status(200).json({ users });
-    } catch (error) {
-      return next(error);
-    }
-  });
-
-  instance.patch(
-    '/api/admin/users/:userId/status',
-    requireRole('ADMIN'),
-    async (req, res, next) => {
-      try {
-        const targetUserId = String(req.params.userId);
-        const parsed = adminUpdateUserStatusSchema.parse(req.body ?? {});
-        if (targetUserId === req.user!.id && parsed.status !== 'ACTIVE') {
-          return res.status(400).json({
-            error: {
-              code: 'SELF_STATUS_CHANGE_FORBIDDEN',
-              message: 'Administrators cannot disable or suspend their own active account.'
-            }
-          });
-        }
-        const updated = await repository.updateUserStatusForAdmin(
-          req.user!,
-          targetUserId,
-          parsed.status
-        );
-        if (!updated) {
-          return res.status(404).json({
-            error: {
-              code: 'NOT_FOUND',
-              message: 'The requested resource was not found.'
-            }
-          });
-        }
-        return res.status(200).json({ user: updated });
+        const events = await repository.listSchoolAuditEvents(req.schoolAccess!);
+        return res.json({ events });
       } catch (error) {
         return next(error);
       }
@@ -570,25 +524,12 @@ export function createApp(options: CreateAppOptions = {}) {
           }
         });
       }
-      if (error instanceof DuplicateFieldError) {
-        return res.status(409).json({
+      if (error instanceof DomainRuleError) {
+        return res.status(error.statusCode).json({
           error: {
-            code:
-              error.field === 'phone'
-                ? 'PHONE_ALREADY_IN_USE'
-                : 'EMAIL_ALREADY_IN_USE',
-            message:
-              error.field === 'phone'
-                ? 'An account with this phone number already exists.'
-                : 'An account with this email address already exists.'
-          }
-        });
-      }
-      if (error instanceof BusinessSuspendedError) {
-        return res.status(403).json({
-          error: {
-            code: 'BUSINESS_SUSPENDED',
-            message: error.message
+            code: error.code,
+            message: error.message,
+            ...(error.details ? { details: error.details } : {})
           }
         });
       }
@@ -609,7 +550,7 @@ export const app = createApp();
 
 if (process.env.NODE_ENV !== 'test') {
   const server = app.listen(env.PORT, '0.0.0.0', () =>
-    console.info(`ORQELI API listening on ${env.PORT}`)
+    console.info(`ORQELI Education API listening on ${env.PORT} (${env.DATA_STORE_MODE})`)
   );
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {

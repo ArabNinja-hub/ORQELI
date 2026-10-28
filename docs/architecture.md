@@ -1,42 +1,58 @@
-# Architecture and decisions
+# Architecture & Security Boundaries
 
-## Deployment boundary
+## 1. Service Separation & Deployment Boundary
 
-`apps/web` is a static React SPA and can be deployed to a static host. `apps/api` is a separate Node service and requires a reachable PostgreSQL database; GitHub Pages is not an API/database host. The Vite `/api` proxy is development-only. Production deployment must configure the frontend API base URL and API CORS/credentials for the deployed origins.
+ORQELI Education maintains a strict boundary between browser presentation and server-side authority:
 
-## Responsibilities
+- **`apps/web` (`@orqeli/web`)**: React 19 + Vite + TypeScript SPA. Renders the public research overview, sign-in flow, school staff academic workspace, guardian published-results view, and `@media print` A4 report cards. Browser code uses relative `/api/*` paths exclusively (never hardcoded `localhost` URLs) and never stores session identifiers in `localStorage` or `sessionStorage`.
+- **`apps/api` (`@orqeli/api`)**: Node.js + Express 5 + TypeScript JSON API. Owns runtime environment validation (Zod), session management, CSRF verification, Argon2id password verification, school-level tenant isolation, role/allocation authorization, completeness validation, state transitions, and audit logging.
+- **PostgreSQL + Prisma**: Durable relational store (`apps/api/prisma/schema.prisma` and committed migrations under `apps/api/prisma/migrations/`).
 
-- Web: the public shell plus customer, business-owner, and administrator views. Authorization is enforced by the API on every request; the client never holds a session token in JavaScript-readable storage (the session lives in an `HttpOnly` cookie) and keeps only the CSRF token and the safe user profile in memory.
-- API: JSON HTTP boundary, runtime environment validation, security headers, origin-restricted CORS, generic errors, database client, and role/owner authorization primitives.
-- PostgreSQL: durable relational records, foreign keys, uniqueness and indexes. Prisma schema is the source of truth; use reviewed, committed Prisma migrations for schema changes (`npm run db:migrate` locally, `prisma migrate deploy` in deployment).
+Note: GitHub Pages or static CDN hosts can only serve static assets and cannot host `@orqeli/api` or PostgreSQL. No automatic production deployment is triggered from working branches.
 
-## Data model
+---
 
-`User` has a single role (`CUSTOMER`, `BUSINESS_OWNER`, `ADMIN`); a user can own businesses and/or have customer bookings. `Business` is owned by one user and carries city/location/contact data and review status. `Service` and weekday `WorkingHour` records belong to a business. `Booking` can point to an account or store guest name/phone/optional email, with start/end timestamps stored as PostgreSQL `timestamptz(3)` instants and a unique reference. Normalize incoming and outgoing instants as UTC; interpret `WorkingHour` wall-clock times using the explicitly configured business timezone (initial market: `Africa/Lusaka`), rather than treating them as UTC. `AuditEvent` records actor, action, entity and optional JSON metadata. Prices are optional integer minor units with ZMW currency; no payment behavior is present.
+## 2. Relational Domain & Multi-School Tenant Isolation
 
-The city is a string rather than a closed enum so additional Zambian cities can be added without schema changes. Business list queries must include `status: APPROVED`; pending/rejected/suspended listings are not public and cannot accept bookings. Approval changes belong only to trusted administrator endpoints and should create audit events. The API currently has no business or booking endpoints.
+Every school-specific table carries an explicit `schoolId` column and foreign key referencing `School(id)`:
 
-## Authorization/security architecture
+- `School` — Tenant root (`code`, `name`, `sector`, `province`, `district`, `timezone`, `isSyntheticDemo`, `status`).
+- `SchoolMembership` — Binds `User` to `School` with a `SchoolRole` (`SCHOOL_ADMIN`, `HEAD_TEACHER`, `DEPUTY_HEAD`, `TEACHER`, `PARENT_GUARDIAN`) and `MembershipStatus`.
+- `AcademicYear` & `AcademicTerm` — School calendar hierarchy (`TERM_1`, `TERM_2`, `TERM_3`).
+- `SchoolClass` & `Subject` — Classes (`gradeLevel`, optional `classTeacherMembershipId`) and school subjects (`code`, `maxMark`, `isCore`).
+- `ClassSubjectAllocation` — Authorises a specific `TEACHER` membership to enter marks for `(schoolClassId, subjectId)`.
+- `Learner` & `LearnerGuardianLink` — School-scoped learner records (`@@unique([schoolId, admissionNumber])`, `preferredChannel`) and explicit guardian-to-learner links.
+- `TermResultPack` & `SubjectMark` — Class-term result lifecycle (`DRAFT` → `SUBMITTED` → `NEEDS_REVISION` → `APPROVED` → `PUBLISHED`) and individual learner-subject marks (`PENDING`, `PRESENT`, `ABSENT`, `EXEMPT`).
+- `AuditEvent` — Immutable event log recording `schoolId`, `actorUserId`, `actorMembershipId`, `action`, `entityType`, `entityId`, `beforeState`, `afterState`, and `metadata`.
+- `Session` (`"session"`) — PostgreSQL backing table for `connect-pg-simple`.
 
-`requireAuth`, `requireRole`, and `ownerScope` in `apps/api/src/authz.ts` enforce role-based access control and tenant isolation:
+### How Isolation Is Enforced Today
 
-- **PostgreSQL Session Persistence**: Sessions are stored in the PostgreSQL `"session"` table via `express-session` and `connect-pg-simple` (`apps/api/src/session.ts`), matching the `Session` model in `apps/api/prisma/schema.prisma`. `MemoryStore` is explicitly prohibited in `production`.
-- **Cookie Security & Fixation Defense**: Session cookies use `httpOnly: true`, `secure: true` in `production`, `sameSite: 'lax'` (configurable), and explicit `maxAge`. On login and registration, `req.session.regenerate()` rotates the session ID before binding `userId`, invalidating any pre-authentication session ID. Logout calls `req.session.destroy()` and clears the cookie.
-- **CSRF Defense-in-Depth**: State-changing requests (`POST`, `PUT`, `PATCH`, `DELETE`) enforce `Origin`/`Referer` allowlisting, reject `Sec-Fetch-Site: cross-site`, reject browser form content types (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`), and **require** a valid HMAC-SHA256 `X-CSRF-Token` header verified with `crypto.timingSafeEqual`. A missing header returns `403 CSRF_MISSING`; a bad signature returns `403 CSRF_INVALID`. Anonymous tokens (issued before login/registration) are accepted only while the request has no session-bound CSRF secret, so an anonymous token cannot authorise an authenticated session. The token is derived from `SESSION_SECRET` and a per-session secret, never stored in JavaScript-readable storage, and is not a session identifier.
-- **Server-Derived Identity & Ownership**: The API resolves `req.user` strictly from `req.session.userId` against the database on every request and verifies that the account is `ACTIVE`. Client-submitted `userId`, `ownerId`, `role`, or `status` fields are never trusted. Every business-owner query and mutation scopes by `ownerScope(req.user)` (`{ ownerId: req.user.id }`).
+1. **Server-Derived Identity**: `req.user` and `req.memberships` are hydrated on every `/api` request from `req.session.userId` against the repository. Client-supplied user IDs, roles, or school memberships are never trusted.
+2. **Route Gate (`requireSchoolRole`)**: Every `/api/schools/:schoolId/*` route verifies that the authenticated user holds an `ACTIVE` membership in that exact `schoolId` (and that the school is not `SUSPENDED`) with an allowed `SchoolRole`. Users from another school immediately receive `403 SCHOOL_ACCESS_DENIED`.
+3. **Repository Scope (`schoolScope`)**: Every repository query and mutation filters by `{ schoolId: access.schoolId }` in addition to primary keys (`packId`, `learnerId`, etc.), preventing cross-school ID enumeration or tampering.
 
-## Booking consistency (future phase)
+---
 
-A future booking endpoint must only accept approved businesses and active services, derive duration and end time from the database, verify opening hours and availability, and re-check all conditions during the write transaction. Use an appropriate transaction isolation/locking strategy and preferably a PostgreSQL exclusion constraint on a `tstzrange(starts_at, ends_at, '[)')` per business for active conflicting appointments (requiring `btree_gist`), with booking status updates designed around that constraint. This protection and all booking behavior are not implemented in Phase 1.
+## 3. Implemented Security Controls vs. Planned Hardening
 
-## Dependency audit follow-up
+To avoid overstating security posture during early-stage development, ORQELI Education separates **implemented controls** from **planned controls**:
 
-The installed Prisma packages resolve to 6.19.3, with `@prisma/config` 6.19.3 depending on `deepmerge-ts` 7.1.5. `npm audit` reports three high-severity nodes in this single dependency chain (`prisma` → `@prisma/config` → `deepmerge-ts`), for GHSA-ggr8-5vv4-36mx (recursive-graph stack exhaustion; affected `<8.0.0`, fixed in `8.0.0`). npm's available fix is Prisma 7.10.1, whose published `@prisma/config` 7.10.1 manifest depends on `deepmerge-ts` 8.0.2; this is a SemVer-major Prisma upgrade. No upgrade or override was applied because Prisma 7 compatibility with the existing schema, generated client and migration setup has not been verified. Recheck with `npm audit` before deployment and test any proposed dependency change end-to-end.
+### Implemented and Tested in This Codebase
+- **Argon2id password hashing** (`argon2id`, constant-time dummy verification when email is unknown).
+- **PostgreSQL-persisted `HttpOnly` sessions** (`express-session` + `connect-pg-simple`), session ID rotation (`req.session.regenerate()`) on login, `MemoryStore` blocked in `production`, and `Secure` cookies enforced in `production`.
+- **HMAC-SHA256 CSRF defense-in-depth**: `Origin`/`Referer` allowlisting, `Sec-Fetch-Site: cross-site` rejection, form content-type rejection, and constant-time verification of session-bound `X-CSRF-Token` headers on all state-changing HTTP methods.
+- **No open public self-registration**: Accounts and school memberships cannot be self-created via public endpoints.
+- **API-enforced workflow permissions**:
+  - Only the allocated subject `TEACHER` can enter/modify marks for a class-subject, and only while the pack is `DRAFT` or `NEEDS_REVISION`.
+  - Incomplete packs (`missingCount > 0`) are rejected at submission, approval, and publication (`409 INCOMPLETE_MARKS`).
+  - Only `HEAD_TEACHER` or `SCHOOL_ADMIN` can approve or publish results, and publication requires `status === 'APPROVED'` (`409 APPROVAL_REQUIRED_BEFORE_PUBLICATION`).
+  - `PARENT_GUARDIAN` endpoints filter strictly on `TermResultPack.status === 'PUBLISHED'` and `LearnerGuardianLink` — unpublished marks are never returned.
+- **Transactional audit logging**: Mark creations/updates (with `beforeState` and `afterState`) and workflow status transitions write `AuditEvent` records inside the same database transaction in `PrismaEducationRepository`.
 
-## Assumptions and follow-up
-
-- ZMW is the initial currency; monetary values are represented as integer minor units only if a service price is later supplied.
-- A business owner may own multiple businesses.
-- Working hours use weekday (0–6) and local wall-clock strings; the Phase 1 schema does not store a business timezone. Before booking implementation, add or define a trusted timezone field/config (initially `Africa/Lusaka`) and handle UTC conversion consistently.
-- Guest bookings do not require a user record; collection, retention, and privacy requirements for contact details must be decided before launch.
-- Initial migrations should be generated from the Prisma schema, reviewed, and committed. Database tooling could not be exercised in the current environment because PostgreSQL/Docker are not installed.
+### Planned Before Any Real-School Pilot (Not Yet Implemented)
+- **PostgreSQL Row-Level Security (RLS)** policies binding `app.current_school_id` at the database session level as defense-in-depth behind repository scoping.
+- **Authentication rate limiting, account lockout, and MFA** for school leadership and platform administrators.
+- **Tamper-evident audit retention** (append-only DB role permissions prohibiting `UPDATE`/`DELETE` on `"AuditEvent"` in production).
+- **Encryption & retention governance** for real learner records once legal/regulatory data-protection requirements in Zambia (Data Protection Act, 2021) are formally reviewed.
+- **Prisma dependency upgrade review**: `prisma` 6.19.x carries a known advisory in its CLI config transitive dependency (`@prisma/config` → `deepmerge-ts`). Upgrading to Prisma 7+ should be validated end-to-end against staging PostgreSQL before production release.

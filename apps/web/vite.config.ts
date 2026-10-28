@@ -37,7 +37,7 @@ export default defineConfig(() => ({
     proxy: {
       '/api': {
         target: resolveApiProxyTarget({ fileValues: readWorkspaceEnvFileValues() }),
-        changeOrigin: true
+        changeOrigin: false
       }
     }
   }
