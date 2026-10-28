@@ -1,6 +1,8 @@
 import type { InMemoryEducationRepository } from './repository.js';
 
 export const SYNTHETIC_SANDBOX_CREDENTIAL = 'SyntheticDemo!2026';
+export const SYNTHETIC_DEMO_ENROLMENT_CODE = 'ORQ-8B02-2026';
+export const SYNTHETIC_DEMO_ENROLMENT_ADMISSION_NO = 'SYN-2026-0802';
 
 export interface SandboxPersonaInfo {
   label: string;
@@ -13,6 +15,36 @@ export interface SandboxPersonaInfo {
 }
 
 export const SANDBOX_PERSONAS: readonly SandboxPersonaInfo[] = [
+  {
+    label: 'Verified Student (OPUS-Style Portal)',
+    name: 'Lubasi Phiri (Synthetic Student)',
+    email: 'student.lubasi@synthetic.orqeli.invalid',
+    role: 'STUDENT',
+    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
+    schoolCode: 'SYN-ZM-LUS-01',
+    purpose:
+      'Open the verified Grade 8B student portal, inspect published Term 2 subject marks & grades, print the A4 report card, and confirm Term 3 unpublished marks stay hidden.'
+  },
+  {
+    label: 'Pending Student (Awaiting Approval)',
+    name: 'Bupe Kasonde (Synthetic Applicant)',
+    email: 'student.pending@synthetic.orqeli.invalid',
+    role: 'STUDENT',
+    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
+    schoolCode: 'SYN-ZM-LUS-01',
+    purpose:
+      'Sign in before school verification is complete to inspect the pending approval status view with zero access to academic records.'
+  },
+  {
+    label: 'Head Teacher (Admin & Approver)',
+    name: 'Mrs. Mutale Mulenga (Synthetic)',
+    email: 'head.mulenga@synthetic.orqeli.invalid',
+    role: 'HEAD_TEACHER',
+    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
+    schoolCode: 'SYN-ZM-LUS-01',
+    purpose:
+      'Manage learner roster, issue/revoke single-use enrolment codes, approve pending student requests, post announcements, and approve/publish term result packs.'
+  },
   {
     label: 'Subject & Class Teacher',
     name: 'Mr. Chanda Banda (Synthetic)',
@@ -31,27 +63,7 @@ export const SANDBOX_PERSONAS: readonly SandboxPersonaInfo[] = [
     schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
     schoolCode: 'SYN-ZM-LUS-01',
     purpose:
-      'Inspect school-wide completeness, review submitted packs, return packs for correction with notes, and inspect audit events.'
-  },
-  {
-    label: 'Head Teacher (Approver)',
-    name: 'Mrs. Mutale Mulenga (Synthetic)',
-    email: 'head.mulenga@synthetic.orqeli.invalid',
-    role: 'HEAD_TEACHER',
-    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
-    schoolCode: 'SYN-ZM-LUS-01',
-    purpose:
-      'Perform final approval and publication of complete result packs and generate printable A4 report cards.'
-  },
-  {
-    label: 'Parent / Guardian',
-    name: 'Mr. Kelvin Phiri (Synthetic)',
-    email: 'guardian.phiri@synthetic.orqeli.invalid',
-    role: 'PARENT_GUARDIAN',
-    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
-    schoolCode: 'SYN-ZM-LUS-01',
-    purpose:
-      'View strictly PUBLISHED learner report cards only; unpublished Grade 9A marks remain completely hidden.'
+      'Inspect school-wide completeness, review submitted packs, return packs for correction with notes, and manage student verification.'
   },
   {
     label: 'Second School Head Teacher',
@@ -69,17 +81,22 @@ export function populateSyntheticInMemoryDataset(
   repo: InMemoryEducationRepository,
   sharedPasswordHash: string
 ): void {
-  // School 1: Government Secondary School (Synthetic)
+  // School 1: Government Secondary School (Synthetic, Student Portal Active)
   const school1 = repo.seedSchool({
     id: 'sch_syn_lus_01',
     code: 'SYN-ZM-LUS-01',
+    registrationNumber: 'SYN-REG-LUS-0101',
     name: 'Lukanga Day Secondary (Synthetic Demo)',
     sector: 'GOVERNMENT',
     province: 'Lusaka',
     district: 'Chilanga',
+    levelSummary: 'Grades 8–12 Day Secondary',
+    publicDescription:
+      'Synthetic public secondary school profile for demonstrating teacher mark entry, approval workflow, and verified student portal access.',
     phone: '+260211000101',
     email: 'office@lukanga.synthetic.orqeli.invalid',
     isSyntheticDemo: true,
+    studentPortalEnabled: true,
     status: 'PILOT_PREP'
   });
 
@@ -111,6 +128,18 @@ export function populateSyntheticInMemoryDataset(
     id: 'usr_syn_guardian_phiri',
     name: 'Mr. Kelvin Phiri (Synthetic)',
     email: 'guardian.phiri@synthetic.orqeli.invalid',
+    passwordHash: sharedPasswordHash
+  });
+  const studentLubasi = repo.seedUser({
+    id: 'usr_syn_student_lubasi',
+    name: 'Lubasi Phiri',
+    email: 'student.lubasi@synthetic.orqeli.invalid',
+    passwordHash: sharedPasswordHash
+  });
+  const studentPending = repo.seedUser({
+    id: 'usr_syn_student_pending',
+    name: 'Bupe Kasonde',
+    email: 'student.pending@synthetic.orqeli.invalid',
     passwordHash: sharedPasswordHash
   });
 
@@ -147,6 +176,20 @@ export function populateSyntheticInMemoryDataset(
     schoolId: school1.id,
     userId: guardianPhiri.id,
     role: 'PARENT_GUARDIAN'
+  });
+  const memStudentLubasi = repo.seedMembership({
+    id: 'mem_syn_student_lubasi',
+    schoolId: school1.id,
+    userId: studentLubasi.id,
+    role: 'STUDENT',
+    status: 'ACTIVE'
+  });
+  const memStudentPending = repo.seedMembership({
+    id: 'mem_syn_student_pending',
+    schoolId: school1.id,
+    userId: studentPending.id,
+    role: 'STUDENT',
+    status: 'INACTIVE'
   });
 
   const year2026 = repo.seedAcademicYear({
@@ -313,7 +356,7 @@ export function populateSyntheticInMemoryDataset(
     preferredChannel: 'PRINT_REPORT'
   });
 
-  // Grade 8B Synthetic Learner (linked to same Guardian Phiri, with a PUBLISHED Term 2 report)
+  // Grade 8B Synthetic Learners
   const lrnLubasi = repo.seedLearner({
     id: 'lrn_syn_801',
     schoolId: school1.id,
@@ -323,6 +366,17 @@ export function populateSyntheticInMemoryDataset(
     schoolClassId: class8B.id,
     guardianName: 'Mr. Kelvin Phiri (Synthetic)',
     guardianPhone: '+260970000101',
+    preferredChannel: 'PRINT_REPORT'
+  });
+  const lrnChisomo = repo.seedLearner({
+    id: 'lrn_syn_802',
+    schoolId: school1.id,
+    admissionNumber: SYNTHETIC_DEMO_ENROLMENT_ADMISSION_NO,
+    firstName: 'Chisomo',
+    lastName: 'Banda',
+    schoolClassId: class8B.id,
+    guardianName: 'Mrs. Ruth Banda (Synthetic)',
+    guardianPhone: '+260970000108',
     preferredChannel: 'PRINT_REPORT'
   });
 
@@ -337,6 +391,69 @@ export function populateSyntheticInMemoryDataset(
     membershipId: memGuardianPhiri.id,
     learnerId: lrnLubasi.id,
     relationship: 'Parent / Guardian'
+  });
+
+  // Verified student link for Lubasi Phiri (SYN-2026-0801)
+  repo.seedStudentLink({
+    id: 'slk_syn_lubasi_801',
+    schoolId: school1.id,
+    membershipId: memStudentLubasi.id,
+    learnerId: lrnLubasi.id,
+    verificationMethod: 'ENROLMENT_CODE',
+    verifiedByMembershipId: memHead1.id,
+    verifiedAt: new Date('2026-08-10T09:00:00.000Z')
+  });
+
+  // Single-use enrolment code ready for self-registration walkthrough (Chisomo Banda, SYN-2026-0802)
+  repo.seedEnrolmentCode({
+    id: 'ecd_syn_chisomo_802',
+    schoolId: school1.id,
+    learnerId: lrnChisomo.id,
+    plainCode: SYNTHETIC_DEMO_ENROLMENT_CODE,
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    createdByMembershipId: memHead1.id
+  });
+
+  // Pending student registration request awaiting school office review (Bupe Kasonde, SYN-2026-0903)
+  repo.seedRegistrationRequest({
+    id: 'srq_syn_bupe_903',
+    schoolId: school1.id,
+    userId: studentPending.id,
+    membershipId: memStudentPending.id,
+    claimedAdmissionNo: 'SYN-2026-0903',
+    claimedName: 'Bupe Kasonde',
+    claimedClassNote: 'Grade 9A',
+    status: 'PENDING',
+    createdAt: new Date('2026-10-20T08:15:00.000Z')
+  });
+
+  // School Announcements (1 public student/staff notice, 1 internal staff-only notice)
+  repo.seedAnnouncement({
+    id: 'ann_syn_t2_published',
+    schoolId: school1.id,
+    title: 'Term 2 (2026) Official Results Published for Grade 8B',
+    body: 'Approved Term 2 academic results for Grade 8B are now available in the student portal and as printable A4 statements.',
+    audience: 'STUDENTS_AND_STAFF',
+    postedByMembershipId: memHead1.id,
+    publishedAt: new Date('2026-08-06T14:30:00.000Z')
+  });
+  repo.seedAnnouncement({
+    id: 'ann_syn_t3_schedule',
+    schoolId: school1.id,
+    title: 'Term 3 End-of-Term Moderation in Progress',
+    body: 'Term 3 subject marks are currently under teacher entry and leadership moderation. Results appear only after formal Head Teacher publication.',
+    audience: 'STUDENTS_AND_STAFF',
+    postedByMembershipId: memHead1.id,
+    publishedAt: new Date('2026-10-18T10:00:00.000Z')
+  });
+  repo.seedAnnouncement({
+    id: 'ann_syn_staff_internal',
+    schoolId: school1.id,
+    title: 'Staff Mark-Sheet Deadline Reminder (Internal)',
+    body: 'All subject teachers must complete pending Term 3 entries before Friday 16:00 CAT for Deputy Head moderation.',
+    audience: 'STAFF_ONLY',
+    postedByMembershipId: memHead1.id,
+    publishedAt: new Date('2026-10-19T07:30:00.000Z')
   });
 
   // Pack 1: Grade 9A Term 3 — DRAFT with 1 missing Mathematics mark for Mwila Chibwe
@@ -382,7 +499,7 @@ export function populateSyntheticInMemoryDataset(
     });
   }
 
-  // Pack 2: Grade 8B Term 2 — PUBLISHED (complete, approved & published)
+  // Pack 2: Grade 8B Term 2 — PUBLISHED (complete, approved & published for both Grade 8B learners)
   const publishedDate = new Date('2026-08-06T14:00:00.000Z');
   const pack8BT2 = repo.seedResultPack({
     id: 'pck_syn_g8b_t2',
@@ -398,51 +515,71 @@ export function populateSyntheticInMemoryDataset(
     publishedByMembershipId: memHead1.id
   });
 
+  const g8T2Marks: Array<{
+    learnerId: string;
+    subjectId: string;
+    score: number;
+    comment: string;
+    by: string;
+  }> = [
+    { learnerId: lrnLubasi.id, subjectId: subMath.id, score: 81, comment: 'Confident numerical work.', by: memBanda.id },
+    { learnerId: lrnLubasi.id, subjectId: subEng.id, score: 76, comment: 'Attentive reading and grammar.', by: memMwamba.id },
+    { learnerId: lrnLubasi.id, subjectId: subSci.id, score: 84, comment: 'Strong curiosity in experiments.', by: memBanda.id },
+    { learnerId: lrnChisomo.id, subjectId: subMath.id, score: 72, comment: 'Good accuracy in linear equations.', by: memBanda.id },
+    { learnerId: lrnChisomo.id, subjectId: subEng.id, score: 79, comment: 'Expressive composition writing.', by: memMwamba.id },
+    { learnerId: lrnChisomo.id, subjectId: subSci.id, score: 68, comment: 'Solid understanding of plant biology.', by: memBanda.id }
+  ];
+
+  for (const m of g8T2Marks) {
+    repo.seedSubjectMark({
+      schoolId: school1.id,
+      termResultPackId: pack8BT2.id,
+      learnerId: m.learnerId,
+      subjectId: m.subjectId,
+      status: 'PRESENT',
+      score: m.score,
+      teacherComment: m.comment,
+      enteredByMembershipId: m.by,
+      enteredAt: new Date('2026-08-03T11:00:00.000Z')
+    });
+  }
+
+  // Pack 3: Grade 8B Term 3 — DRAFT (unpublished — demonstrates that verified Grade 8B students
+  // see a clear "not yet published" status and NEVER see draft scores!)
+  const pack8BT3 = repo.seedResultPack({
+    id: 'pck_syn_g8b_t3',
+    schoolId: school1.id,
+    academicTermId: term3.id,
+    schoolClassId: class8B.id,
+    status: 'DRAFT'
+  });
   repo.seedSubjectMark({
     schoolId: school1.id,
-    termResultPackId: pack8BT2.id,
+    termResultPackId: pack8BT3.id,
     learnerId: lrnLubasi.id,
     subjectId: subMath.id,
     status: 'PRESENT',
-    score: 81,
-    teacherComment: 'Confident numerical work.',
-    enteredByMembershipId: memBanda.id,
-    enteredAt: new Date('2026-08-03T09:00:00.000Z')
-  });
-  repo.seedSubjectMark({
-    schoolId: school1.id,
-    termResultPackId: pack8BT2.id,
-    learnerId: lrnLubasi.id,
-    subjectId: subEng.id,
-    status: 'PRESENT',
-    score: 76,
-    teacherComment: 'Attentive reading and grammar.',
-    enteredByMembershipId: memMwamba.id,
-    enteredAt: new Date('2026-08-03T11:00:00.000Z')
-  });
-  repo.seedSubjectMark({
-    schoolId: school1.id,
-    termResultPackId: pack8BT2.id,
-    learnerId: lrnLubasi.id,
-    subjectId: subSci.id,
-    status: 'PRESENT',
-    score: 84,
-    teacherComment: 'Strong curiosity in experiments.',
-    enteredByMembershipId: memBanda.id,
-    enteredAt: new Date('2026-08-03T12:00:00.000Z')
+    score: 91,
+    teacherComment: 'Draft Term 3 score — must remain hidden until published.',
+    enteredByMembershipId: memBanda.id
   });
 
-  // School 2: Separate Private School (Synthetic) to verify strict multi-school isolation
+  // School 2: Separate Private School (Synthetic, Student Portal Active) to verify strict multi-school isolation
   const school2 = repo.seedSchool({
     id: 'sch_syn_eas_02',
     code: 'SYN-ZM-EAS-02',
+    registrationNumber: 'SYN-REG-EAS-0202',
     name: 'Mpezeni Trust Academy (Synthetic Demo)',
     sector: 'PRIVATE',
     province: 'Eastern',
     district: 'Chipata',
+    levelSummary: 'Grades 1–9 Primary & Junior Secondary',
+    publicDescription:
+      'Synthetic independent school profile in Eastern Province demonstrating strict tenant isolation across schools.',
     phone: '+260216000202',
     email: 'office@mpezeni.synthetic.orqeli.invalid',
     isSyntheticDemo: true,
+    studentPortalEnabled: true,
     status: 'PILOT_PREP'
   });
 
@@ -518,5 +655,25 @@ export function populateSyntheticInMemoryDataset(
     academicTermId: term3School2.id,
     schoolClassId: class7ASchool2.id,
     status: 'DRAFT'
+  });
+
+  // School 3: Community Secondary School (Synthetic, Student Portal NOT Yet Enabled)
+  // Demonstrates public school discovery where student self-enrolment is disabled.
+  repo.seedSchool({
+    id: 'sch_syn_cb_03',
+    code: 'SYN-ZM-CB-03',
+    registrationNumber: 'SYN-REG-CB-0303',
+    name: 'Mindolo Community Day Secondary (Synthetic Demo)',
+    sector: 'COMMUNITY',
+    province: 'Copperbelt',
+    district: 'Kitwe',
+    levelSummary: 'Grades 8–9 Community Secondary',
+    publicDescription:
+      'Synthetic community school listed in the public directory prior to student portal activation.',
+    phone: '+260212000303',
+    email: 'office@mindolo.synthetic.orqeli.invalid',
+    isSyntheticDemo: true,
+    studentPortalEnabled: false,
+    status: 'PILOT_PREP'
   });
 }

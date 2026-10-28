@@ -15,7 +15,13 @@ import {
   type SchoolStatus,
   type UserAccountStatus
 } from './authz.js';
-import { normalizeEmail } from './schemas.js';
+import { normalizeAdmissionNumber, normalizeEmail } from './schemas.js';
+import {
+  computeSubjectGrade,
+  formatEnrolmentCodeHint,
+  generatePlainEnrolmentCode,
+  hashEnrolmentCode
+} from './enrolmentCrypto.js';
 
 export type TermNumber = 'TERM_1' | 'TERM_2' | 'TERM_3';
 export type ResultPackStatus =
@@ -26,6 +32,9 @@ export type ResultPackStatus =
   | 'PUBLISHED';
 export type MarkEntryStatus = 'PENDING' | 'PRESENT' | 'ABSENT' | 'EXEMPT';
 export type CommunicationChannel = 'PRINT_REPORT' | 'SMS_SUMMARY' | 'GUARDIAN_PORTAL';
+export type StudentVerificationMethod = 'ENROLMENT_CODE' | 'STAFF_APPROVAL';
+export type StudentRegistrationStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type AnnouncementAudience = 'STUDENTS_AND_STAFF' | 'STAFF_ONLY';
 
 export interface StoredUserWithMemberships {
   id: string;
@@ -187,6 +196,8 @@ export interface ReportCardSubjectLineDto {
   status: Exclude<MarkEntryStatus, 'PENDING'>;
   score: number | null;
   maxMark: number;
+  percentage: number | null;
+  grade: string;
   teacherComment: string | null;
   teacherName: string;
 }
@@ -264,6 +275,192 @@ export interface MarkEntryWriteInput {
   status: MarkEntryStatus;
   score: number | null;
   teacherComment: string | null;
+}
+
+export interface PublicSchoolSearchFilters {
+  q?: string;
+  province?: string;
+  sector?: SchoolSector;
+  portalOnly?: boolean;
+}
+
+export interface PublicSchoolProfileDto {
+  id: string;
+  code: string;
+  registrationNumber: string | null;
+  name: string;
+  sector: SchoolSector;
+  province: string;
+  district: string;
+  levelSummary: string | null;
+  publicDescription: string | null;
+  phone: string | null;
+  email: string | null;
+  status: SchoolStatus;
+  isSyntheticDemo: boolean;
+  studentPortalEnabled: boolean;
+  canSelfRegister: boolean;
+  currentAcademicYearLabel: string | null;
+}
+
+export interface RegisterStudentAccountInput {
+  schoolId: string;
+  fullName: string;
+  admissionNumber: string;
+  email: string;
+  passwordHash: string;
+  verificationMode: StudentVerificationMethod;
+  enrolmentCode: string | null;
+  classHint: string | null;
+}
+
+export interface RegisterStudentAccountResult {
+  outcome: 'VERIFIED' | 'PENDING_APPROVAL';
+  user: StoredUserWithMemberships;
+  schoolCode: string;
+  requestId: string | null;
+  message: string;
+}
+
+export interface SchoolAnnouncementDto {
+  id: string;
+  schoolId: string;
+  title: string;
+  body: string;
+  audience: AnnouncementAudience;
+  postedByName: string;
+  publishedAt: string;
+}
+
+export interface IssuedEnrolmentCodeDto {
+  id: string;
+  learnerId: string;
+  admissionNumber: string;
+  learnerName: string;
+  plainCode: string;
+  codeHint: string;
+  expiresAt: string;
+}
+
+export interface AdminRosterLearnerDto {
+  id: string;
+  admissionNumber: string;
+  firstName: string;
+  lastName: string;
+  schoolClassId: string | null;
+  currentClassName: string | null;
+  gradeLevel: number | null;
+  preferredChannel: CommunicationChannel;
+  active: boolean;
+  linkedStudent: {
+    userId: string;
+    name: string;
+    email: string | null;
+    verificationMethod: StudentVerificationMethod;
+    verifiedAt: string;
+  } | null;
+  activeEnrolmentCode: {
+    id: string;
+    codeHint: string;
+    expiresAt: string;
+    createdAt: string;
+  } | null;
+}
+
+export interface AdminRegistrationRequestDto {
+  id: string;
+  userId: string;
+  applicantEmail: string | null;
+  claimedName: string;
+  claimedAdmissionNo: string;
+  claimedClassNote: string | null;
+  status: StudentRegistrationStatus;
+  decisionNotes: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+  reviewedByName: string | null;
+  approvedLearnerId: string | null;
+  suggestedLearner: {
+    id: string;
+    admissionNumber: string;
+    firstName: string;
+    lastName: string;
+    currentClassName: string | null;
+    alreadyLinked: boolean;
+  } | null;
+}
+
+export interface SchoolAdminPortalStateDto {
+  school: SafeSchoolSummary & {
+    registrationNumber: string | null;
+    levelSummary: string | null;
+    studentPortalEnabled: boolean;
+  };
+  classes: Array<{
+    id: string;
+    name: string;
+    gradeLevel: number;
+    academicYearLabel: string;
+  }>;
+  learners: AdminRosterLearnerDto[];
+  registrationRequests: AdminRegistrationRequestDto[];
+  announcements: SchoolAnnouncementDto[];
+}
+
+export interface StudentTermResultStatusDto {
+  packId: string;
+  academicYearLabel: string;
+  academicTermLabel: string;
+  termNumber: TermNumber;
+  className: string;
+  gradeLevel: number;
+  publicationState: 'PUBLISHED' | 'UNPUBLISHED';
+  statusMessage: string;
+  publishedAt: string | null;
+  reportCard: ReportCardDto | null;
+}
+
+export interface StudentPortalAccountDto {
+  membershipId: string;
+  school: SafeSchoolSummary & {
+    registrationNumber: string | null;
+    levelSummary: string | null;
+    phone: string | null;
+    email: string | null;
+  };
+  verificationState: 'VERIFIED' | 'PENDING_APPROVAL' | 'REJECTED';
+  learner: {
+    id: string;
+    admissionNumber: string;
+    firstName: string;
+    lastName: string;
+    currentClassName: string | null;
+    gradeLevel: number | null;
+    currentAcademicYearLabel: string | null;
+    currentTermLabel: string | null;
+    verificationMethod: StudentVerificationMethod;
+    verifiedAt: string;
+  } | null;
+  pendingRequest: {
+    id: string;
+    claimedAdmissionNo: string;
+    claimedClassNote: string | null;
+    status: StudentRegistrationStatus;
+    decisionNotes: string | null;
+    createdAt: string;
+    reviewedAt: string | null;
+  } | null;
+  termResults: StudentTermResultStatusDto[];
+  announcements: SchoolAnnouncementDto[];
+}
+
+export interface StudentPortalOverviewDto {
+  studentUser: {
+    id: string;
+    name: string;
+    email: string | null;
+  };
+  accounts: StudentPortalAccountDto[];
 }
 
 export class DomainRuleError extends Error {
@@ -422,6 +619,53 @@ export interface EducationRepository {
     access: SchoolAccessContext
   ): Promise<GuardianResultsOverviewDto | null>;
   listSchoolAuditEvents(access: SchoolAccessContext): Promise<AuditEventDto[]>;
+  listPublicSchools(filters: PublicSchoolSearchFilters): Promise<PublicSchoolProfileDto[]>;
+  getPublicSchoolProfile(codeOrId: string): Promise<PublicSchoolProfileDto | null>;
+  registerStudentAccount(
+    input: RegisterStudentAccountInput
+  ): Promise<RegisterStudentAccountResult>;
+  getSchoolAdminPortalState(
+    access: SchoolAccessContext
+  ): Promise<SchoolAdminPortalStateDto | null>;
+  createSchoolLearner(
+    access: SchoolAccessContext,
+    input: {
+      admissionNumber: string;
+      firstName: string;
+      lastName: string;
+      schoolClassId: string;
+      preferredChannel: CommunicationChannel;
+    }
+  ): Promise<AdminRosterLearnerDto>;
+  issueLearnerEnrolmentCode(
+    access: SchoolAccessContext,
+    learnerId: string,
+    expiresInDays: number
+  ): Promise<IssuedEnrolmentCodeDto>;
+  revokeLearnerEnrolmentCode(
+    access: SchoolAccessContext,
+    codeId: string
+  ): Promise<void>;
+  approveStudentRegistrationRequest(
+    access: SchoolAccessContext,
+    requestId: string,
+    input: { learnerId: string; decisionNotes: string | null }
+  ): Promise<AdminRegistrationRequestDto>;
+  rejectStudentRegistrationRequest(
+    access: SchoolAccessContext,
+    requestId: string,
+    input: { decisionNotes: string }
+  ): Promise<AdminRegistrationRequestDto>;
+  createSchoolAnnouncement(
+    access: SchoolAccessContext,
+    input: { title: string; body: string; audience: AnnouncementAudience }
+  ): Promise<SchoolAnnouncementDto>;
+  getStudentPortalOverview(userId: string): Promise<StudentPortalOverviewDto>;
+  getReportCardForStudent(
+    access: SchoolAccessContext,
+    packId: string,
+    learnerId: string
+  ): Promise<ReportCardDto | null>;
 }
 
 // ============================================================================
@@ -1243,6 +1487,7 @@ export class PrismaEducationRepository implements EducationRepository {
         status: mark.status,
         score: mark.score,
         maxMark: sub.maxMark,
+        ...computeSubjectGrade(mark.status, mark.score, sub.maxMark),
         teacherComment: mark.teacherComment,
         teacherName: sub.teacherName
       };
@@ -1389,6 +1634,7 @@ export class PrismaEducationRepository implements EducationRepository {
             status: mark.status,
             score: mark.score,
             maxMark: alloc.subject.maxMark,
+            ...computeSubjectGrade(mark.status, mark.score, alloc.subject.maxMark),
             teacherComment: mark.teacherComment,
             teacherName: alloc.teacherMembership.user.name
           });
@@ -1499,6 +1745,1425 @@ export class PrismaEducationRepository implements EducationRepository {
       createdAt: ev.createdAt.toISOString()
     }));
   }
+
+  private toPublicSchoolDto(school: {
+    id: string;
+    code: string;
+    registrationNumber: string | null;
+    name: string;
+    sector: SchoolSector;
+    province: string;
+    district: string;
+    levelSummary: string | null;
+    publicDescription: string | null;
+    phone: string | null;
+    email: string | null;
+    status: SchoolStatus;
+    isSyntheticDemo: boolean;
+    studentPortalEnabled: boolean;
+    academicYears: Array<{ label: string }>;
+  }): PublicSchoolProfileDto {
+    const canSelfRegister =
+      school.status !== 'SUSPENDED' && school.studentPortalEnabled === true;
+    return {
+      id: school.id,
+      code: school.code,
+      registrationNumber: school.registrationNumber,
+      name: school.name,
+      sector: school.sector,
+      province: school.province,
+      district: school.district,
+      levelSummary: school.levelSummary,
+      publicDescription: school.publicDescription,
+      phone: school.phone,
+      email: school.email,
+      status: school.status,
+      isSyntheticDemo: school.isSyntheticDemo,
+      studentPortalEnabled: school.studentPortalEnabled,
+      canSelfRegister,
+      currentAcademicYearLabel: school.academicYears[0]?.label ?? null
+    };
+  }
+
+  async listPublicSchools(
+    filters: PublicSchoolSearchFilters
+  ): Promise<PublicSchoolProfileDto[]> {
+    const q = filters.q?.trim();
+    const where: Prisma.SchoolWhereInput = {
+      status: { not: 'SUSPENDED' },
+      ...(filters.province
+        ? { province: { equals: filters.province, mode: 'insensitive' } }
+        : {}),
+      ...(filters.sector ? { sector: filters.sector } : {}),
+      ...(filters.portalOnly ? { studentPortalEnabled: true } : {}),
+      ...(q
+        ? {
+            OR: [
+              { name: { contains: q, mode: 'insensitive' } },
+              { code: { contains: q, mode: 'insensitive' } },
+              { registrationNumber: { contains: q, mode: 'insensitive' } },
+              { province: { contains: q, mode: 'insensitive' } },
+              { district: { contains: q, mode: 'insensitive' } },
+              { levelSummary: { contains: q, mode: 'insensitive' } }
+            ]
+          }
+        : {})
+    };
+
+    const schools = await this.prisma.school.findMany({
+      where,
+      include: {
+        academicYears: {
+          where: { isCurrent: true },
+          select: { label: true },
+          take: 1
+        }
+      },
+      orderBy: [{ studentPortalEnabled: 'desc' }, { name: 'asc' }]
+    });
+
+    return schools.map((s) => this.toPublicSchoolDto(s));
+  }
+
+  async getPublicSchoolProfile(codeOrId: string): Promise<PublicSchoolProfileDto | null> {
+    const trimmed = codeOrId.trim();
+    const school = await this.prisma.school.findFirst({
+      where: {
+        status: { not: 'SUSPENDED' },
+        OR: [{ code: { equals: trimmed, mode: 'insensitive' } }, { id: trimmed }]
+      },
+      include: {
+        academicYears: {
+          where: { isCurrent: true },
+          select: { label: true },
+          take: 1
+        }
+      }
+    });
+    return school ? this.toPublicSchoolDto(school) : null;
+  }
+
+  async registerStudentAccount(
+    input: RegisterStudentAccountInput
+  ): Promise<RegisterStudentAccountResult> {
+    const normalizedEmail = normalizeEmail(input.email);
+    const normalizedAdm = normalizeAdmissionNumber(input.admissionNumber);
+
+    const school = await this.prisma.school.findUnique({
+      where: { id: input.schoolId }
+    });
+    if (!school || school.status === 'SUSPENDED' || !school.studentPortalEnabled) {
+      throw new DomainRuleError(
+        403,
+        'STUDENT_PORTAL_NOT_ENABLED',
+        'Student portal self-registration is not enabled for this school.'
+      );
+    }
+
+    const existingEmailUser = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: { id: true }
+    });
+    if (existingEmailUser) {
+      throw new DomainRuleError(
+        409,
+        'ACCOUNT_EMAIL_CONFLICT',
+        'Unable to create a student account with this email address. Sign in if you have already registered, or contact your school office.'
+      );
+    }
+
+    if (input.verificationMode === 'ENROLMENT_CODE') {
+      if (!input.enrolmentCode) {
+        throw new DomainRuleError(
+          400,
+          'INVALID_ENROLMENT_VERIFICATION',
+          'Enrolment verification failed. Confirm your school, learner admission number, and active single-use enrolment code with your school office.'
+        );
+      }
+      const codeHash = hashEnrolmentCode(input.enrolmentCode);
+      const now = new Date();
+
+      const createdUserId = await this.prisma.$transaction(async (tx) => {
+        const codeRecord = await tx.studentEnrolmentCode.findFirst({
+          where: { schoolId: school.id, codeHash },
+          include: {
+            learner: {
+              include: { studentLink: { select: { id: true } } }
+            }
+          }
+        });
+
+        // Uniform error for wrong code, wrong admission number, expired, revoked,
+        // already used, inactive learner, or already linked learner (anti-enumeration).
+        if (
+          !codeRecord ||
+          !codeRecord.learner.active ||
+          normalizeAdmissionNumber(codeRecord.learner.admissionNumber) !== normalizedAdm ||
+          codeRecord.revokedAt !== null ||
+          codeRecord.usedAt !== null ||
+          codeRecord.expiresAt.getTime() <= now.getTime() ||
+          codeRecord.learner.studentLink !== null
+        ) {
+          throw new DomainRuleError(
+            400,
+            'INVALID_ENROLMENT_VERIFICATION',
+            'Enrolment verification failed. Confirm your school, learner admission number, and active single-use enrolment code with your school office.'
+          );
+        }
+
+        const user = await tx.user.create({
+          data: {
+            email: normalizedEmail,
+            name: input.fullName.trim(),
+            passwordHash: input.passwordHash,
+            platformRole: 'STANDARD',
+            status: 'ACTIVE'
+          }
+        });
+
+        const consumed = await tx.studentEnrolmentCode.updateMany({
+          where: {
+            id: codeRecord.id,
+            schoolId: school.id,
+            usedAt: null,
+            revokedAt: null
+          },
+          data: {
+            usedAt: now,
+            usedByUserId: user.id
+          }
+        });
+        if (consumed.count !== 1) {
+          throw new DomainRuleError(
+            400,
+            'INVALID_ENROLMENT_VERIFICATION',
+            'Enrolment verification failed. Confirm your school, learner admission number, and active single-use enrolment code with your school office.'
+          );
+        }
+
+        const membership = await tx.schoolMembership.create({
+          data: {
+            schoolId: school.id,
+            userId: user.id,
+            role: 'STUDENT',
+            status: 'ACTIVE'
+          }
+        });
+
+        const link = await tx.learnerStudentLink.create({
+          data: {
+            schoolId: school.id,
+            membershipId: membership.id,
+            learnerId: codeRecord.learner.id,
+            verificationMethod: 'ENROLMENT_CODE',
+            verifiedByMembershipId: codeRecord.createdByMembershipId
+          }
+        });
+
+        await tx.auditEvent.create({
+          data: {
+            schoolId: school.id,
+            actorUserId: user.id,
+            actorMembershipId: membership.id,
+            action: 'STUDENT_REGISTERED_VIA_CODE',
+            entityType: 'LearnerStudentLink',
+            entityId: link.id,
+            afterState: {
+              learnerId: codeRecord.learner.id,
+              verificationMethod: 'ENROLMENT_CODE'
+            },
+            metadata: {
+              enrolmentCodeId: codeRecord.id,
+              codeHint: codeRecord.codeHint
+            }
+          }
+        });
+
+        return user.id;
+      });
+
+      const hydrated = await this.findUserById(createdUserId);
+      if (!hydrated) {
+        throw new Error('Failed to load newly created student user.');
+      }
+
+      return {
+        outcome: 'VERIFIED',
+        user: hydrated,
+        schoolCode: school.code,
+        requestId: null,
+        message: 'Student account verified and linked to your school academic record.'
+      };
+    }
+
+    // STAFF_APPROVAL mode: never probe or leak whether admissionNumber exists publicly.
+    const { createdUserId, requestId } = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: normalizedEmail,
+          name: input.fullName.trim(),
+          passwordHash: input.passwordHash,
+          platformRole: 'STANDARD',
+          status: 'ACTIVE'
+        }
+      });
+
+      const membership = await tx.schoolMembership.create({
+        data: {
+          schoolId: school.id,
+          userId: user.id,
+          role: 'STUDENT',
+          status: 'INACTIVE'
+        }
+      });
+
+      const reqRecord = await tx.studentRegistrationRequest.create({
+        data: {
+          schoolId: school.id,
+          userId: user.id,
+          submittedAdmissionNumber: normalizedAdm,
+          applicantName: input.fullName.trim(),
+          classHint: input.classHint,
+          status: 'PENDING'
+        }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          schoolId: school.id,
+          actorUserId: user.id,
+          actorMembershipId: membership.id,
+          action: 'STUDENT_REGISTRATION_REQUESTED',
+          entityType: 'StudentRegistrationRequest',
+          entityId: reqRecord.id,
+          afterState: {
+            status: 'PENDING',
+            claimedAdmissionNo: normalizedAdm
+          }
+        }
+      });
+
+      return { createdUserId: user.id, requestId: reqRecord.id };
+    });
+
+    const hydrated = await this.findUserById(createdUserId);
+    if (!hydrated) {
+      throw new Error('Failed to load newly created pending student user.');
+    }
+
+    return {
+      outcome: 'PENDING_APPROVAL',
+      user: hydrated,
+      schoolCode: school.code,
+      requestId,
+      message:
+        'Registration request submitted. Your school administration must verify your learner record before academic results become visible.'
+    };
+  }
+
+  private assertSchoolLeadership(access: SchoolAccessContext): void {
+    if (!hasAnyRole(access.roles, LEADERSHIP_ROLES)) {
+      throw new DomainRuleError(
+        403,
+        'FORBIDDEN',
+        'Only school leadership can manage learner enrolment and student portal verification.'
+      );
+    }
+  }
+
+  async getSchoolAdminPortalState(
+    access: SchoolAccessContext
+  ): Promise<SchoolAdminPortalStateDto | null> {
+    this.assertSchoolLeadership(access);
+    const scope = schoolScope(access);
+    const now = new Date();
+
+    const school = await this.prisma.school.findUnique({
+      where: { id: scope.schoolId }
+    });
+    if (!school) {
+      return null;
+    }
+
+    const [classes, learners, requests, announcements] = await Promise.all([
+      this.prisma.schoolClass.findMany({
+        where: { schoolId: scope.schoolId },
+        include: { academicYear: { select: { label: true } } },
+        orderBy: [{ gradeLevel: 'asc' }, { name: 'asc' }]
+      }),
+      this.prisma.learner.findMany({
+        where: { schoolId: scope.schoolId },
+        include: {
+          schoolClass: { select: { id: true, name: true, gradeLevel: true } },
+          studentLink: {
+            include: {
+              membership: {
+                include: { user: { select: { id: true, name: true, email: true } } }
+              }
+            }
+          },
+          enrolmentCodes: {
+            where: {
+              usedAt: null,
+              revokedAt: null,
+              expiresAt: { gt: now }
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 1
+          }
+        },
+        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }]
+      }),
+      this.prisma.studentRegistrationRequest.findMany({
+        where: { schoolId: scope.schoolId },
+        include: {
+          user: { select: { email: true } },
+          reviewedBy: { include: { user: { select: { name: true } } } }
+        },
+        orderBy: [{ createdAt: 'desc' }]
+      }),
+      this.prisma.schoolAnnouncement.findMany({
+        where: { schoolId: scope.schoolId },
+        include: {
+          publishedBy: { include: { user: { select: { name: true } } } }
+        },
+        orderBy: [{ publishedAt: 'desc' }]
+      })
+    ]);
+
+    const learnerByAdmission = new Map(
+      learners.map((l) => [normalizeAdmissionNumber(l.admissionNumber), l])
+    );
+
+    return {
+      school: {
+        id: school.id,
+        code: school.code,
+        name: school.name,
+        sector: school.sector,
+        province: school.province,
+        district: school.district,
+        isSyntheticDemo: school.isSyntheticDemo,
+        status: school.status,
+        registrationNumber: school.registrationNumber,
+        levelSummary: school.levelSummary,
+        studentPortalEnabled: school.studentPortalEnabled
+      },
+      classes: classes.map((c) => ({
+        id: c.id,
+        name: c.name,
+        gradeLevel: c.gradeLevel,
+        academicYearLabel: c.academicYear.label
+      })),
+      learners: learners.map((l) => {
+        const activeCode = l.enrolmentCodes[0] ?? null;
+        return {
+          id: l.id,
+          admissionNumber: l.admissionNumber,
+          firstName: l.firstName,
+          lastName: l.lastName,
+          schoolClassId: l.schoolClassId,
+          currentClassName: l.schoolClass?.name ?? null,
+          gradeLevel: l.schoolClass?.gradeLevel ?? null,
+          preferredChannel: l.preferredChannel,
+          active: l.active,
+          linkedStudent: l.studentLink
+            ? {
+                userId: l.studentLink.membership.user.id,
+                name: l.studentLink.membership.user.name,
+                email: l.studentLink.membership.user.email,
+                verificationMethod: l.studentLink.verificationMethod,
+                verifiedAt: l.studentLink.createdAt.toISOString()
+              }
+            : null,
+          activeEnrolmentCode: activeCode
+            ? {
+                id: activeCode.id,
+                codeHint: activeCode.codeHint,
+                expiresAt: activeCode.expiresAt.toISOString(),
+                createdAt: activeCode.createdAt.toISOString()
+              }
+            : null
+        };
+      }),
+      registrationRequests: requests.map((r) => {
+        const suggested = learnerByAdmission.get(
+          normalizeAdmissionNumber(r.submittedAdmissionNumber)
+        );
+        return {
+          id: r.id,
+          userId: r.userId,
+          applicantEmail: r.user.email,
+          claimedName: r.applicantName,
+          claimedAdmissionNo: r.submittedAdmissionNumber,
+          claimedClassNote: r.classHint,
+          status: r.status,
+          decisionNotes: r.decisionNotes,
+          createdAt: r.createdAt.toISOString(),
+          reviewedAt: r.reviewedAt ? r.reviewedAt.toISOString() : null,
+          reviewedByName: r.reviewedBy?.user.name ?? null,
+          approvedLearnerId: r.linkedLearnerId,
+          suggestedLearner: suggested
+            ? {
+                id: suggested.id,
+                admissionNumber: suggested.admissionNumber,
+                firstName: suggested.firstName,
+                lastName: suggested.lastName,
+                currentClassName: suggested.schoolClass?.name ?? null,
+                alreadyLinked: suggested.studentLink !== null
+              }
+            : null
+        };
+      }),
+      announcements: announcements.map((a) => ({
+        id: a.id,
+        schoolId: a.schoolId,
+        title: a.title,
+        body: a.body,
+        audience: a.audience,
+        postedByName: a.publishedBy?.user.name ?? 'School Administration',
+        publishedAt: a.publishedAt.toISOString()
+      }))
+    };
+  }
+
+  async createSchoolLearner(
+    access: SchoolAccessContext,
+    input: {
+      admissionNumber: string;
+      firstName: string;
+      lastName: string;
+      schoolClassId: string;
+      preferredChannel: CommunicationChannel;
+    }
+  ): Promise<AdminRosterLearnerDto> {
+    this.assertSchoolLeadership(access);
+    const scope = schoolScope(access);
+    const normalizedAdm = normalizeAdmissionNumber(input.admissionNumber);
+
+    const cls = await this.prisma.schoolClass.findFirst({
+      where: { id: input.schoolClassId, schoolId: scope.schoolId }
+    });
+    if (!cls) {
+      throw new DomainRuleError(
+        400,
+        'INVALID_SCHOOL_CLASS',
+        'Selected class does not belong to this school.'
+      );
+    }
+
+    const duplicate = await this.prisma.learner.findFirst({
+      where: {
+        schoolId: scope.schoolId,
+        admissionNumber: { equals: normalizedAdm, mode: 'insensitive' }
+      }
+    });
+    if (duplicate) {
+      throw new DomainRuleError(
+        409,
+        'DUPLICATE_ADMISSION_NUMBER',
+        `A learner with admission number ${normalizedAdm} already exists at this school.`
+      );
+    }
+
+    const learner = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.learner.create({
+        data: {
+          schoolId: scope.schoolId,
+          admissionNumber: normalizedAdm,
+          firstName: input.firstName.trim(),
+          lastName: input.lastName.trim(),
+          schoolClassId: cls.id,
+          preferredChannel: input.preferredChannel,
+          active: true
+        }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          schoolId: scope.schoolId,
+          actorUserId: access.actorUserId,
+          actorMembershipId: access.actorMembershipId,
+          action: 'LEARNER_CREATED',
+          entityType: 'Learner',
+          entityId: created.id,
+          afterState: {
+            admissionNumber: created.admissionNumber,
+            schoolClassId: cls.id
+          }
+        }
+      });
+
+      return created;
+    });
+
+    return {
+      id: learner.id,
+      admissionNumber: learner.admissionNumber,
+      firstName: learner.firstName,
+      lastName: learner.lastName,
+      schoolClassId: cls.id,
+      currentClassName: cls.name,
+      gradeLevel: cls.gradeLevel,
+      preferredChannel: learner.preferredChannel,
+      active: learner.active,
+      linkedStudent: null,
+      activeEnrolmentCode: null
+    };
+  }
+
+  async issueLearnerEnrolmentCode(
+    access: SchoolAccessContext,
+    learnerId: string,
+    expiresInDays: number
+  ): Promise<IssuedEnrolmentCodeDto> {
+    this.assertSchoolLeadership(access);
+    const scope = schoolScope(access);
+
+    const learner = await this.prisma.learner.findFirst({
+      where: { id: learnerId, schoolId: scope.schoolId },
+      include: { studentLink: { select: { id: true } } }
+    });
+    if (!learner || !learner.active) {
+      throw new DomainRuleError(
+        404,
+        'LEARNER_NOT_FOUND',
+        'Active learner record not found in this school.'
+      );
+    }
+    if (learner.studentLink) {
+      throw new DomainRuleError(
+        409,
+        'LEARNER_ALREADY_LINKED',
+        'This learner already has a verified student portal account.'
+      );
+    }
+
+    const plainCode = generatePlainEnrolmentCode();
+    const codeHash = hashEnrolmentCode(plainCode);
+    const codeHint = formatEnrolmentCodeHint(plainCode);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + expiresInDays * 24 * 60 * 60 * 1000);
+
+    const createdCode = await this.prisma.$transaction(async (tx) => {
+      await tx.studentEnrolmentCode.updateMany({
+        where: {
+          schoolId: scope.schoolId,
+          learnerId: learner.id,
+          usedAt: null,
+          revokedAt: null
+        },
+        data: {
+          revokedAt: now,
+          revokedByMembershipId: access.actorMembershipId
+        }
+      });
+
+      const record = await tx.studentEnrolmentCode.create({
+        data: {
+          schoolId: scope.schoolId,
+          learnerId: learner.id,
+          codeHash,
+          codeHint,
+          expiresAt,
+          createdByMembershipId: access.actorMembershipId
+        }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          schoolId: scope.schoolId,
+          actorUserId: access.actorUserId,
+          actorMembershipId: access.actorMembershipId,
+          action: 'STUDENT_ENROLMENT_CODE_ISSUED',
+          entityType: 'StudentEnrolmentCode',
+          entityId: record.id,
+          afterState: {
+            learnerId: learner.id,
+            codeHint,
+            expiresAt: expiresAt.toISOString()
+          }
+        }
+      });
+
+      return record;
+    });
+
+    return {
+      id: createdCode.id,
+      learnerId: learner.id,
+      admissionNumber: learner.admissionNumber,
+      learnerName: `${learner.firstName} ${learner.lastName}`,
+      plainCode,
+      codeHint,
+      expiresAt: expiresAt.toISOString()
+    };
+  }
+
+  async revokeLearnerEnrolmentCode(
+    access: SchoolAccessContext,
+    codeId: string
+  ): Promise<void> {
+    this.assertSchoolLeadership(access);
+    const scope = schoolScope(access);
+    const now = new Date();
+
+    const codeRecord = await this.prisma.studentEnrolmentCode.findFirst({
+      where: { id: codeId, schoolId: scope.schoolId }
+    });
+    if (!codeRecord) {
+      throw new DomainRuleError(
+        404,
+        'ENROLMENT_CODE_NOT_FOUND',
+        'Enrolment code not found in this school.'
+      );
+    }
+    if (codeRecord.usedAt || codeRecord.revokedAt) {
+      throw new DomainRuleError(
+        409,
+        'ENROLMENT_CODE_INACTIVE',
+        'Enrolment code has already been used or revoked.'
+      );
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.studentEnrolmentCode.update({
+        where: { id: codeRecord.id },
+        data: {
+          revokedAt: now,
+          revokedByMembershipId: access.actorMembershipId
+        }
+      }),
+      this.prisma.auditEvent.create({
+        data: {
+          schoolId: scope.schoolId,
+          actorUserId: access.actorUserId,
+          actorMembershipId: access.actorMembershipId,
+          action: 'STUDENT_ENROLMENT_CODE_REVOKED',
+          entityType: 'StudentEnrolmentCode',
+          entityId: codeRecord.id,
+          afterState: { revokedAt: now.toISOString() }
+        }
+      })
+    ]);
+  }
+
+  async approveStudentRegistrationRequest(
+    access: SchoolAccessContext,
+    requestId: string,
+    input: { learnerId: string; decisionNotes: string | null }
+  ): Promise<AdminRegistrationRequestDto> {
+    this.assertSchoolLeadership(access);
+    const scope = schoolScope(access);
+    const now = new Date();
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const reqRecord = await tx.studentRegistrationRequest.findFirst({
+        where: { id: requestId, schoolId: scope.schoolId },
+        include: { user: { select: { email: true } } }
+      });
+      if (!reqRecord) {
+        throw new DomainRuleError(
+          404,
+          'REGISTRATION_REQUEST_NOT_FOUND',
+          'Student registration request not found in this school.'
+        );
+      }
+      if (reqRecord.status !== 'PENDING') {
+        throw new DomainRuleError(
+          409,
+          'REGISTRATION_REQUEST_ALREADY_DECIDED',
+          `Registration request has already been ${reqRecord.status.toLowerCase()}.`
+        );
+      }
+      if (reqRecord.userId === access.actorUserId) {
+        throw new DomainRuleError(
+          403,
+          'SELF_APPROVAL_FORBIDDEN',
+          'You cannot approve your own registration request.'
+        );
+      }
+
+      const learner = await tx.learner.findFirst({
+        where: { id: input.learnerId, schoolId: scope.schoolId },
+        include: {
+          schoolClass: { select: { name: true } },
+          studentLink: { select: { id: true } }
+        }
+      });
+      if (!learner || !learner.active) {
+        throw new DomainRuleError(
+          404,
+          'LEARNER_NOT_FOUND',
+          'Selected learner record not found or inactive in this school.'
+        );
+      }
+      if (learner.studentLink) {
+        throw new DomainRuleError(
+          409,
+          'LEARNER_ALREADY_LINKED',
+          'Selected learner record is already linked to another student account.'
+        );
+      }
+
+      const studentMembership = await tx.schoolMembership.upsert({
+        where: {
+          schoolId_userId_role: {
+            schoolId: scope.schoolId,
+            userId: reqRecord.userId,
+            role: 'STUDENT'
+          }
+        },
+        create: {
+          schoolId: scope.schoolId,
+          userId: reqRecord.userId,
+          role: 'STUDENT',
+          status: 'ACTIVE'
+        },
+        update: {
+          status: 'ACTIVE'
+        }
+      });
+
+      const existingMembershipLink = await tx.learnerStudentLink.findUnique({
+        where: { membershipId: studentMembership.id }
+      });
+      if (existingMembershipLink) {
+        throw new DomainRuleError(
+          409,
+          'STUDENT_ALREADY_LINKED',
+          'This student account is already linked to a learner record.'
+        );
+      }
+
+      const link = await tx.learnerStudentLink.create({
+        data: {
+          schoolId: scope.schoolId,
+          membershipId: studentMembership.id,
+          learnerId: learner.id,
+          verificationMethod: 'STAFF_APPROVAL',
+          verifiedByMembershipId: access.actorMembershipId
+        }
+      });
+
+      await tx.studentEnrolmentCode.updateMany({
+        where: {
+          schoolId: scope.schoolId,
+          learnerId: learner.id,
+          usedAt: null,
+          revokedAt: null
+        },
+        data: {
+          revokedAt: now,
+          revokedByMembershipId: access.actorMembershipId
+        }
+      });
+
+      const savedReq = await tx.studentRegistrationRequest.update({
+        where: { id: reqRecord.id },
+        data: {
+          status: 'APPROVED',
+          linkedLearnerId: learner.id,
+          reviewedByMembershipId: access.actorMembershipId,
+          reviewedAt: now,
+          decisionNotes: input.decisionNotes
+        },
+        include: {
+          user: { select: { email: true } },
+          reviewedBy: { include: { user: { select: { name: true } } } }
+        }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          schoolId: scope.schoolId,
+          actorUserId: access.actorUserId,
+          actorMembershipId: access.actorMembershipId,
+          action: 'STUDENT_REGISTRATION_APPROVED',
+          entityType: 'StudentRegistrationRequest',
+          entityId: reqRecord.id,
+          beforeState: { status: 'PENDING' },
+          afterState: {
+            status: 'APPROVED',
+            learnerId: learner.id,
+            studentLinkId: link.id
+          }
+        }
+      });
+
+      return { savedReq, learner };
+    });
+
+    return {
+      id: updated.savedReq.id,
+      userId: updated.savedReq.userId,
+      applicantEmail: updated.savedReq.user.email,
+      claimedName: updated.savedReq.applicantName,
+      claimedAdmissionNo: updated.savedReq.submittedAdmissionNumber,
+      claimedClassNote: updated.savedReq.classHint,
+      status: updated.savedReq.status,
+      decisionNotes: updated.savedReq.decisionNotes,
+      createdAt: updated.savedReq.createdAt.toISOString(),
+      reviewedAt: updated.savedReq.reviewedAt?.toISOString() ?? null,
+      reviewedByName: updated.savedReq.reviewedBy?.user.name ?? null,
+      approvedLearnerId: updated.savedReq.linkedLearnerId,
+      suggestedLearner: {
+        id: updated.learner.id,
+        admissionNumber: updated.learner.admissionNumber,
+        firstName: updated.learner.firstName,
+        lastName: updated.learner.lastName,
+        currentClassName: updated.learner.schoolClass?.name ?? null,
+        alreadyLinked: true
+      }
+    };
+  }
+
+  async rejectStudentRegistrationRequest(
+    access: SchoolAccessContext,
+    requestId: string,
+    input: { decisionNotes: string }
+  ): Promise<AdminRegistrationRequestDto> {
+    this.assertSchoolLeadership(access);
+    const scope = schoolScope(access);
+    const now = new Date();
+
+    const savedReq = await this.prisma.$transaction(async (tx) => {
+      const reqRecord = await tx.studentRegistrationRequest.findFirst({
+        where: { id: requestId, schoolId: scope.schoolId }
+      });
+      if (!reqRecord) {
+        throw new DomainRuleError(
+          404,
+          'REGISTRATION_REQUEST_NOT_FOUND',
+          'Student registration request not found in this school.'
+        );
+      }
+      if (reqRecord.status !== 'PENDING') {
+        throw new DomainRuleError(
+          409,
+          'REGISTRATION_REQUEST_ALREADY_DECIDED',
+          `Registration request has already been ${reqRecord.status.toLowerCase()}.`
+        );
+      }
+
+      await tx.schoolMembership.updateMany({
+        where: {
+          schoolId: scope.schoolId,
+          userId: reqRecord.userId,
+          role: 'STUDENT'
+        },
+        data: { status: 'INACTIVE' }
+      });
+
+      const updated = await tx.studentRegistrationRequest.update({
+        where: { id: reqRecord.id },
+        data: {
+          status: 'REJECTED',
+          reviewedByMembershipId: access.actorMembershipId,
+          reviewedAt: now,
+          decisionNotes: input.decisionNotes
+        },
+        include: {
+          user: { select: { email: true } },
+          reviewedBy: { include: { user: { select: { name: true } } } }
+        }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          schoolId: scope.schoolId,
+          actorUserId: access.actorUserId,
+          actorMembershipId: access.actorMembershipId,
+          action: 'STUDENT_REGISTRATION_REJECTED',
+          entityType: 'StudentRegistrationRequest',
+          entityId: reqRecord.id,
+          beforeState: { status: 'PENDING' },
+          afterState: {
+            status: 'REJECTED',
+            decisionNotes: input.decisionNotes
+          }
+        }
+      });
+
+      return updated;
+    });
+
+    return {
+      id: savedReq.id,
+      userId: savedReq.userId,
+      applicantEmail: savedReq.user.email,
+      claimedName: savedReq.applicantName,
+      claimedAdmissionNo: savedReq.submittedAdmissionNumber,
+      claimedClassNote: savedReq.classHint,
+      status: savedReq.status,
+      decisionNotes: savedReq.decisionNotes,
+      createdAt: savedReq.createdAt.toISOString(),
+      reviewedAt: savedReq.reviewedAt?.toISOString() ?? null,
+      reviewedByName: savedReq.reviewedBy?.user.name ?? null,
+      approvedLearnerId: null,
+      suggestedLearner: null
+    };
+  }
+
+  async createSchoolAnnouncement(
+    access: SchoolAccessContext,
+    input: { title: string; body: string; audience: AnnouncementAudience }
+  ): Promise<SchoolAnnouncementDto> {
+    this.assertSchoolLeadership(access);
+    const scope = schoolScope(access);
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const announcement = await tx.schoolAnnouncement.create({
+        data: {
+          schoolId: scope.schoolId,
+          title: input.title.trim(),
+          body: input.body.trim(),
+          audience: input.audience,
+          publishedByMembershipId: access.actorMembershipId
+        },
+        include: {
+          publishedBy: { include: { user: { select: { name: true } } } }
+        }
+      });
+
+      await tx.auditEvent.create({
+        data: {
+          schoolId: scope.schoolId,
+          actorUserId: access.actorUserId,
+          actorMembershipId: access.actorMembershipId,
+          action: 'SCHOOL_ANNOUNCEMENT_POSTED',
+          entityType: 'SchoolAnnouncement',
+          entityId: announcement.id,
+          afterState: {
+            title: announcement.title,
+            audience: announcement.audience
+          }
+        }
+      });
+
+      return announcement;
+    });
+
+    return {
+      id: created.id,
+      schoolId: created.schoolId,
+      title: created.title,
+      body: created.body,
+      audience: created.audience,
+      postedByName: created.publishedBy?.user.name ?? 'School Administration',
+      publishedAt: created.publishedAt.toISOString()
+    };
+  }
+
+  async getStudentPortalOverview(userId: string): Promise<StudentPortalOverviewDto> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, email: true }
+    });
+    if (!user) {
+      throw new DomainRuleError(404, 'USER_NOT_FOUND', 'Student user not found.');
+    }
+
+    const [memberships, userRequests] = await Promise.all([
+      this.prisma.schoolMembership.findMany({
+        where: { userId, role: 'STUDENT' },
+        include: {
+          school: true,
+          studentLink: {
+            include: {
+              learner: {
+                include: {
+                  schoolClass: {
+                    include: { academicYear: true }
+                  }
+                }
+              }
+            }
+          }
+        },
+        orderBy: { createdAt: 'asc' }
+      }),
+      this.prisma.studentRegistrationRequest.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' }
+      })
+    ]);
+
+    const accounts: StudentPortalAccountDto[] = [];
+
+    for (const m of memberships) {
+      const schoolSummary = {
+        id: m.school.id,
+        code: m.school.code,
+        name: m.school.name,
+        sector: m.school.sector,
+        province: m.school.province,
+        district: m.school.district,
+        isSyntheticDemo: m.school.isSyntheticDemo,
+        status: m.school.status,
+        registrationNumber: m.school.registrationNumber,
+        levelSummary: m.school.levelSummary,
+        phone: m.school.phone,
+        email: m.school.email
+      };
+
+      const latestReq = userRequests.find((r) => r.schoolId === m.schoolId) ?? null;
+
+      if (m.status !== 'ACTIVE' || !m.studentLink || !m.studentLink.learner.active) {
+        const verificationState =
+          latestReq?.status === 'REJECTED' ? 'REJECTED' : 'PENDING_APPROVAL';
+        accounts.push({
+          membershipId: m.id,
+          school: schoolSummary,
+          verificationState,
+          learner: null,
+          pendingRequest: latestReq
+            ? {
+                id: latestReq.id,
+                claimedAdmissionNo: latestReq.submittedAdmissionNumber,
+                claimedClassNote: latestReq.classHint,
+                status: latestReq.status,
+                decisionNotes: latestReq.decisionNotes,
+                createdAt: latestReq.createdAt.toISOString(),
+                reviewedAt: latestReq.reviewedAt?.toISOString() ?? null
+              }
+            : null,
+          termResults: [],
+          announcements: []
+        });
+        continue;
+      }
+
+      const learner = m.studentLink.learner;
+      const [currentYear, currentTerm, announcements, packs] = await Promise.all([
+        this.prisma.academicYear.findFirst({
+          where: { schoolId: m.schoolId, isCurrent: true }
+        }),
+        this.prisma.academicTerm.findFirst({
+          where: { schoolId: m.schoolId, isCurrent: true }
+        }),
+        this.prisma.schoolAnnouncement.findMany({
+          where: {
+            schoolId: m.schoolId,
+            audience: 'STUDENTS_AND_STAFF'
+          },
+          include: {
+            publishedBy: { include: { user: { select: { name: true } } } }
+          },
+          orderBy: { publishedAt: 'desc' },
+          take: 20
+        }),
+        learner.schoolClassId
+          ? this.prisma.termResultPack.findMany({
+              where: {
+                schoolId: m.schoolId,
+                schoolClassId: learner.schoolClassId
+              },
+              include: {
+                academicTerm: { include: { academicYear: true } },
+                schoolClass: {
+                  include: {
+                    classTeacher: { include: { user: { select: { name: true } } } },
+                    allocations: {
+                      include: {
+                        subject: true,
+                        teacherMembership: {
+                          include: { user: { select: { name: true } } }
+                        }
+                      },
+                      orderBy: { subject: { code: 'asc' } }
+                    }
+                  }
+                },
+                approvedBy: { include: { user: { select: { name: true } } } },
+                marks: {
+                  where: { learnerId: learner.id }
+                }
+              },
+              orderBy: [
+                { academicTerm: { startsOn: 'desc' } },
+                { createdAt: 'desc' }
+              ]
+            })
+          : Promise.resolve([])
+      ]);
+
+      const termResults: StudentTermResultStatusDto[] = packs.map((pack) => {
+        if (pack.status !== 'PUBLISHED') {
+          return {
+            packId: pack.id,
+            academicYearLabel: pack.academicTerm.academicYear.label,
+            academicTermLabel: pack.academicTerm.label,
+            termNumber: pack.academicTerm.termNumber,
+            className: pack.schoolClass.name,
+            gradeLevel: pack.schoolClass.gradeLevel,
+            publicationState: 'UNPUBLISHED',
+            statusMessage: 'Results not yet published by school administration.',
+            publishedAt: null,
+            reportCard: null
+          };
+        }
+
+        const markBySubject = new Map(pack.marks.map((sm) => [sm.subjectId, sm]));
+        const subjectLines: ReportCardSubjectLineDto[] = [];
+        let complete = true;
+
+        for (const alloc of pack.schoolClass.allocations) {
+          const mark = markBySubject.get(alloc.subjectId);
+          if (!mark || mark.status === 'PENDING') {
+            complete = false;
+            break;
+          }
+          subjectLines.push({
+            subjectId: alloc.subject.id,
+            subjectCode: alloc.subject.code,
+            subjectName: alloc.subject.name,
+            status: mark.status,
+            score: mark.score,
+            maxMark: alloc.subject.maxMark,
+            ...computeSubjectGrade(mark.status, mark.score, alloc.subject.maxMark),
+            teacherComment: mark.teacherComment,
+            teacherName: alloc.teacherMembership.user.name
+          });
+        }
+
+        if (!complete || subjectLines.length === 0) {
+          return {
+            packId: pack.id,
+            academicYearLabel: pack.academicTerm.academicYear.label,
+            academicTermLabel: pack.academicTerm.label,
+            termNumber: pack.academicTerm.termNumber,
+            className: pack.schoolClass.name,
+            gradeLevel: pack.schoolClass.gradeLevel,
+            publicationState: 'UNPUBLISHED',
+            statusMessage: 'Results not yet published by school administration.',
+            publishedAt: null,
+            reportCard: null
+          };
+        }
+
+        const reportCard: ReportCardDto = {
+          school: {
+            id: m.school.id,
+            code: m.school.code,
+            name: m.school.name,
+            sector: m.school.sector,
+            province: m.school.province,
+            district: m.school.district,
+            isSyntheticDemo: m.school.isSyntheticDemo,
+            status: m.school.status,
+            phone: m.school.phone,
+            timezone: m.school.timezone
+          },
+          publicationState: 'PUBLISHED',
+          academicYearLabel: pack.academicTerm.academicYear.label,
+          academicTermLabel: pack.academicTerm.label,
+          termNumber: pack.academicTerm.termNumber,
+          className: pack.schoolClass.name,
+          gradeLevel: pack.schoolClass.gradeLevel,
+          classTeacherName: pack.schoolClass.classTeacher?.user.name ?? null,
+          approvedByName: pack.approvedBy?.user.name ?? null,
+          approvedAt: pack.approvedAt ? pack.approvedAt.toISOString() : null,
+          publishedAt: pack.publishedAt ? pack.publishedAt.toISOString() : null,
+          learner: {
+            id: learner.id,
+            admissionNumber: learner.admissionNumber,
+            firstName: learner.firstName,
+            lastName: learner.lastName,
+            guardianName: learner.guardianName,
+            preferredChannel: learner.preferredChannel
+          },
+          subjects: subjectLines,
+          summary: computeReportSummary(subjectLines)
+        };
+
+        return {
+          packId: pack.id,
+          academicYearLabel: pack.academicTerm.academicYear.label,
+          academicTermLabel: pack.academicTerm.label,
+          termNumber: pack.academicTerm.termNumber,
+          className: pack.schoolClass.name,
+          gradeLevel: pack.schoolClass.gradeLevel,
+          publicationState: 'PUBLISHED',
+          statusMessage: 'Official term results published.',
+          publishedAt: reportCard.publishedAt,
+          reportCard
+        };
+      });
+
+      accounts.push({
+        membershipId: m.id,
+        school: schoolSummary,
+        verificationState: 'VERIFIED',
+        learner: {
+          id: learner.id,
+          admissionNumber: learner.admissionNumber,
+          firstName: learner.firstName,
+          lastName: learner.lastName,
+          currentClassName: learner.schoolClass?.name ?? null,
+          gradeLevel: learner.schoolClass?.gradeLevel ?? null,
+          currentAcademicYearLabel:
+            learner.schoolClass?.academicYear.label ?? currentYear?.label ?? null,
+          currentTermLabel: currentTerm?.label ?? null,
+          verificationMethod: m.studentLink.verificationMethod,
+          verifiedAt: m.studentLink.createdAt.toISOString()
+        },
+        pendingRequest: null,
+        termResults,
+        announcements: announcements.map((a) => ({
+          id: a.id,
+          schoolId: a.schoolId,
+          title: a.title,
+          body: a.body,
+          audience: a.audience,
+          postedByName: a.publishedBy?.user.name ?? 'School Administration',
+          publishedAt: a.publishedAt.toISOString()
+        }))
+      });
+    }
+
+    return {
+      studentUser: {
+        id: user.id,
+        name: user.name,
+        email: user.email
+      },
+      accounts
+    };
+  }
+
+  async getReportCardForStudent(
+    access: SchoolAccessContext,
+    packId: string,
+    learnerId: string
+  ): Promise<ReportCardDto | null> {
+    if (!access.roles.includes('STUDENT')) {
+      throw new DomainRuleError(
+        403,
+        'FORBIDDEN',
+        'Student report card endpoint requires a verified student school membership.'
+      );
+    }
+    const scope = schoolScope(access);
+
+    const studentLink = await this.prisma.learnerStudentLink.findFirst({
+      where: {
+        schoolId: scope.schoolId,
+        membershipId: access.actorMembershipId
+      },
+      include: { learner: true }
+    });
+
+    if (!studentLink || !studentLink.learner.active || studentLink.learnerId !== learnerId) {
+      throw new DomainRuleError(
+        403,
+        'FORBIDDEN_LEARNER_ACCESS',
+        'Students may only access their own verified academic record.'
+      );
+    }
+
+    const [school, pack] = await Promise.all([
+      this.prisma.school.findUnique({ where: { id: scope.schoolId } }),
+      this.prisma.termResultPack.findFirst({
+        where: { id: packId, schoolId: scope.schoolId },
+        include: {
+          academicTerm: { include: { academicYear: true } },
+          schoolClass: {
+            include: {
+              classTeacher: { include: { user: { select: { name: true } } } },
+              allocations: {
+                include: {
+                  subject: true,
+                  teacherMembership: {
+                    include: { user: { select: { name: true } } }
+                  }
+                },
+                orderBy: { subject: { code: 'asc' } }
+              }
+            }
+          },
+          approvedBy: { include: { user: { select: { name: true } } } },
+          marks: { where: { learnerId: studentLink.learnerId } }
+        }
+      })
+    ]);
+
+    if (!school || !pack) {
+      return null;
+    }
+
+    if (pack.status !== 'PUBLISHED') {
+      throw new DomainRuleError(
+        403,
+        'RESULT_NOT_PUBLISHED',
+        'This term result pack has not yet been published by school administration.'
+      );
+    }
+
+    const markBySubject = new Map(pack.marks.map((m) => [m.subjectId, m]));
+    const subjectLines: ReportCardSubjectLineDto[] = [];
+
+    for (const alloc of pack.schoolClass.allocations) {
+      const mark = markBySubject.get(alloc.subjectId);
+      if (!mark || mark.status === 'PENDING') {
+        throw new DomainRuleError(
+          403,
+          'RESULT_NOT_PUBLISHED',
+          'Results for this student record are not complete for publication.'
+        );
+      }
+      subjectLines.push({
+        subjectId: alloc.subject.id,
+        subjectCode: alloc.subject.code,
+        subjectName: alloc.subject.name,
+        status: mark.status,
+        score: mark.score,
+        maxMark: alloc.subject.maxMark,
+        ...computeSubjectGrade(mark.status, mark.score, alloc.subject.maxMark),
+        teacherComment: mark.teacherComment,
+        teacherName: alloc.teacherMembership.user.name
+      });
+    }
+
+    if (subjectLines.length === 0) {
+      return null;
+    }
+
+    return {
+      school: {
+        id: school.id,
+        code: school.code,
+        name: school.name,
+        sector: school.sector,
+        province: school.province,
+        district: school.district,
+        isSyntheticDemo: school.isSyntheticDemo,
+        status: school.status,
+        phone: school.phone,
+        timezone: school.timezone
+      },
+      publicationState: 'PUBLISHED',
+      academicYearLabel: pack.academicTerm.academicYear.label,
+      academicTermLabel: pack.academicTerm.label,
+      termNumber: pack.academicTerm.termNumber,
+      className: pack.schoolClass.name,
+      gradeLevel: pack.schoolClass.gradeLevel,
+      classTeacherName: pack.schoolClass.classTeacher?.user.name ?? null,
+      approvedByName: pack.approvedBy?.user.name ?? null,
+      approvedAt: pack.approvedAt ? pack.approvedAt.toISOString() : null,
+      publishedAt: pack.publishedAt ? pack.publishedAt.toISOString() : null,
+      learner: {
+        id: studentLink.learner.id,
+        admissionNumber: studentLink.learner.admissionNumber,
+        firstName: studentLink.learner.firstName,
+        lastName: studentLink.learner.lastName,
+        guardianName: studentLink.learner.guardianName,
+        preferredChannel: studentLink.learner.preferredChannel
+      },
+      subjects: subjectLines,
+      summary: computeReportSummary(subjectLines)
+    };
+  }
 }
 
 // ============================================================================
@@ -1520,14 +3185,18 @@ interface MemUser {
 interface MemSchool {
   id: string;
   code: string;
+  registrationNumber: string | null;
   name: string;
   sector: SchoolSector;
   province: string;
   district: string;
+  levelSummary: string | null;
+  publicDescription: string | null;
   phone: string | null;
   email: string | null;
   timezone: string;
   isSyntheticDemo: boolean;
+  studentPortalEnabled: boolean;
   status: SchoolStatus;
 }
 
@@ -1610,6 +3279,58 @@ interface MemGuardianLink {
   relationship: string;
 }
 
+interface MemStudentLink {
+  id: string;
+  schoolId: string;
+  membershipId: string;
+  learnerId: string;
+  verificationMethod: StudentVerificationMethod;
+  verifiedByMembershipId: string | null;
+  verifiedAt: Date;
+}
+
+interface MemEnrolmentCode {
+  id: string;
+  schoolId: string;
+  learnerId: string;
+  codeHash: string;
+  codeHint: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  usedByUserId: string | null;
+  revokedAt: Date | null;
+  revokedByMembershipId: string | null;
+  createdByMembershipId: string;
+  createdAt: Date;
+}
+
+interface MemRegistrationRequest {
+  id: string;
+  schoolId: string;
+  userId: string;
+  membershipId: string;
+  claimedAdmissionNo: string;
+  claimedName: string;
+  claimedClassNote: string | null;
+  status: StudentRegistrationStatus;
+  approvedLearnerId: string | null;
+  reviewedByMembershipId: string | null;
+  reviewedAt: Date | null;
+  decisionNotes: string | null;
+  createdAt: Date;
+}
+
+interface MemAnnouncement {
+  id: string;
+  schoolId: string;
+  title: string;
+  body: string;
+  audience: AnnouncementAudience;
+  postedByMembershipId: string;
+  active: boolean;
+  publishedAt: Date;
+}
+
 interface MemResultPack {
   id: string;
   schoolId: string;
@@ -1666,6 +3387,10 @@ export class InMemoryEducationRepository implements EducationRepository {
   private readonly allocations = new Map<string, MemAllocation>();
   private readonly learners = new Map<string, MemLearner>();
   private readonly guardianLinks = new Map<string, MemGuardianLink>();
+  private readonly studentLinks = new Map<string, MemStudentLink>();
+  private readonly enrolmentCodes = new Map<string, MemEnrolmentCode>();
+  private readonly registrationRequests = new Map<string, MemRegistrationRequest>();
+  private readonly announcements = new Map<string, MemAnnouncement>();
   private readonly resultPacks = new Map<string, MemResultPack>();
   private readonly subjectMarks = new Map<string, MemSubjectMark>();
   private readonly auditEvents: MemAuditEvent[] = [];
@@ -1703,31 +3428,148 @@ export class InMemoryEducationRepository implements EducationRepository {
   seedSchool(input: {
     id?: string;
     code: string;
+    registrationNumber?: string | null;
     name: string;
     sector: SchoolSector;
     province: string;
     district: string;
+    levelSummary?: string | null;
+    publicDescription?: string | null;
     phone?: string | null;
     email?: string | null;
     timezone?: string;
     isSyntheticDemo?: boolean;
+    studentPortalEnabled?: boolean;
     status?: SchoolStatus;
   }): MemSchool {
     const id = input.id ?? this.nextId('sch');
     const record: MemSchool = {
       id,
       code: input.code,
+      registrationNumber: input.registrationNumber ?? null,
       name: input.name,
       sector: input.sector,
       province: input.province,
       district: input.district,
+      levelSummary: input.levelSummary ?? null,
+      publicDescription: input.publicDescription ?? null,
       phone: input.phone ?? null,
       email: input.email ?? null,
       timezone: input.timezone ?? 'Africa/Lusaka',
       isSyntheticDemo: input.isSyntheticDemo ?? true,
+      studentPortalEnabled: input.studentPortalEnabled ?? false,
       status: input.status ?? 'PILOT_PREP'
     };
     this.schools.set(id, record);
+    return record;
+  }
+
+  seedStudentLink(input: {
+    id?: string;
+    schoolId: string;
+    membershipId: string;
+    learnerId: string;
+    verificationMethod: StudentVerificationMethod;
+    verifiedByMembershipId?: string | null;
+    verifiedAt?: Date;
+  }): MemStudentLink {
+    const id = input.id ?? this.nextId('slk');
+    const record: MemStudentLink = {
+      id,
+      schoolId: input.schoolId,
+      membershipId: input.membershipId,
+      learnerId: input.learnerId,
+      verificationMethod: input.verificationMethod,
+      verifiedByMembershipId: input.verifiedByMembershipId ?? null,
+      verifiedAt: input.verifiedAt ?? new Date()
+    };
+    this.studentLinks.set(id, record);
+    return record;
+  }
+
+  seedEnrolmentCode(input: {
+    id?: string;
+    schoolId: string;
+    learnerId: string;
+    plainCode: string;
+    expiresAt: Date;
+    createdByMembershipId: string;
+    usedAt?: Date | null;
+    usedByUserId?: string | null;
+    revokedAt?: Date | null;
+  }): MemEnrolmentCode {
+    const id = input.id ?? this.nextId('ecd');
+    const record: MemEnrolmentCode = {
+      id,
+      schoolId: input.schoolId,
+      learnerId: input.learnerId,
+      codeHash: hashEnrolmentCode(input.plainCode),
+      codeHint: formatEnrolmentCodeHint(input.plainCode),
+      expiresAt: input.expiresAt,
+      usedAt: input.usedAt ?? null,
+      usedByUserId: input.usedByUserId ?? null,
+      revokedAt: input.revokedAt ?? null,
+      revokedByMembershipId: null,
+      createdByMembershipId: input.createdByMembershipId,
+      createdAt: new Date()
+    };
+    this.enrolmentCodes.set(id, record);
+    return record;
+  }
+
+  seedRegistrationRequest(input: {
+    id?: string;
+    schoolId: string;
+    userId: string;
+    membershipId: string;
+    claimedAdmissionNo: string;
+    claimedName: string;
+    claimedClassNote?: string | null;
+    status?: StudentRegistrationStatus;
+    createdAt?: Date;
+  }): MemRegistrationRequest {
+    const id = input.id ?? this.nextId('srq');
+    const record: MemRegistrationRequest = {
+      id,
+      schoolId: input.schoolId,
+      userId: input.userId,
+      membershipId: input.membershipId,
+      claimedAdmissionNo: normalizeAdmissionNumber(input.claimedAdmissionNo),
+      claimedName: input.claimedName.trim(),
+      claimedClassNote: input.claimedClassNote ?? null,
+      status: input.status ?? 'PENDING',
+      approvedLearnerId: null,
+      reviewedByMembershipId: null,
+      reviewedAt: null,
+      decisionNotes: null,
+      createdAt: input.createdAt ?? new Date()
+    };
+    this.registrationRequests.set(id, record);
+    return record;
+  }
+
+  seedAnnouncement(input: {
+    id?: string;
+    schoolId: string;
+    title: string;
+    body: string;
+    audience?: AnnouncementAudience;
+    postedByMembershipId: string;
+    active?: boolean;
+    publishedAt?: Date;
+  }): MemAnnouncement {
+    const id = input.id ?? this.nextId('ann');
+    const record: MemAnnouncement = {
+      id,
+      schoolId: input.schoolId,
+      title: input.title,
+      body: input.body,
+      audience: input.audience ?? 'STUDENTS_AND_STAFF',
+      postedByMembershipId: input.postedByMembershipId,
+      active: input.active ?? true,
+      publishedAt: input.publishedAt ?? new Date()
+    };
+    this.announcements.set(id, record);
     return record;
   }
 
@@ -2014,9 +3856,18 @@ export class InMemoryEducationRepository implements EducationRepository {
     return this.users.get(mem.userId)?.name ?? null;
   }
 
-  private appendAudit(event: Omit<MemAuditEvent, 'id' | 'createdAt'>): void {
+  private appendAudit(
+    event: Omit<MemAuditEvent, 'id' | 'createdAt' | 'beforeState' | 'afterState' | 'metadata'> & {
+      beforeState?: Record<string, unknown> | null;
+      afterState?: Record<string, unknown> | null;
+      metadata?: Record<string, unknown> | null;
+    }
+  ): void {
     this.auditEvents.push({
       ...event,
+      beforeState: event.beforeState ?? null,
+      afterState: event.afterState ?? null,
+      metadata: event.metadata ?? null,
       id: this.nextId('aud'),
       createdAt: new Date()
     });
@@ -2743,6 +4594,7 @@ export class InMemoryEducationRepository implements EducationRepository {
         status: mark.status,
         score: mark.score,
         maxMark: sub.maxMark,
+        ...computeSubjectGrade(mark.status, mark.score, sub.maxMark),
         teacherComment: mark.teacherComment,
         teacherName: sub.teacherName
       };
@@ -2869,6 +4721,7 @@ export class InMemoryEducationRepository implements EducationRepository {
             status: mark.status,
             score: mark.score,
             maxMark: sub.maxMark,
+            ...computeSubjectGrade(mark.status, mark.score, sub.maxMark),
             teacherComment: mark.teacherComment,
             teacherName: this.membershipUserName(alloc.teacherMembershipId) ?? 'Assigned Teacher'
           });
@@ -2974,5 +4827,1239 @@ export class InMemoryEducationRepository implements EducationRepository {
         metadata: ev.metadata,
         createdAt: ev.createdAt.toISOString()
       }));
+  }
+
+  private toMemPublicSchoolDto(school: MemSchool): PublicSchoolProfileDto {
+    const currentYear = [...this.academicYears.values()].find(
+      (yr) => yr.schoolId === school.id && yr.isCurrent
+    );
+    const canSelfRegister =
+      school.status !== 'SUSPENDED' && school.studentPortalEnabled === true;
+
+    return {
+      id: school.id,
+      code: school.code,
+      registrationNumber: school.registrationNumber,
+      name: school.name,
+      sector: school.sector,
+      province: school.province,
+      district: school.district,
+      levelSummary: school.levelSummary,
+      publicDescription: school.publicDescription,
+      phone: school.phone,
+      email: school.email,
+      status: school.status,
+      isSyntheticDemo: school.isSyntheticDemo,
+      studentPortalEnabled: school.studentPortalEnabled,
+      canSelfRegister,
+      currentAcademicYearLabel: currentYear?.label ?? null
+    };
+  }
+
+  async listPublicSchools(
+    filters: PublicSchoolSearchFilters
+  ): Promise<PublicSchoolProfileDto[]> {
+    const q = filters.q?.trim().toLowerCase();
+    const prov = filters.province?.trim().toLowerCase();
+
+    return [...this.schools.values()]
+      .filter((school) => {
+        if (school.status === 'SUSPENDED') return false;
+        if (prov && school.province.toLowerCase() !== prov) return false;
+        if (filters.sector && school.sector !== filters.sector) return false;
+        if (filters.portalOnly && !school.studentPortalEnabled) return false;
+        if (q) {
+          const haystack = [
+            school.name,
+            school.code,
+            school.registrationNumber ?? '',
+            school.province,
+            school.district,
+            school.levelSummary ?? ''
+          ]
+            .join(' ')
+            .toLowerCase();
+          if (!haystack.includes(q)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        if (a.studentPortalEnabled !== b.studentPortalEnabled) {
+          return a.studentPortalEnabled ? -1 : 1;
+        }
+        return a.name.localeCompare(b.name);
+      })
+      .map((s) => this.toMemPublicSchoolDto(s));
+  }
+
+  async getPublicSchoolProfile(codeOrId: string): Promise<PublicSchoolProfileDto | null> {
+    const needle = codeOrId.trim().toLowerCase();
+    const match = [...this.schools.values()].find(
+      (s) =>
+        s.status !== 'SUSPENDED' &&
+        (s.code.toLowerCase() === needle || s.id.toLowerCase() === needle)
+    );
+    return match ? this.toMemPublicSchoolDto(match) : null;
+  }
+
+  private findMemStudentLinkByLearner(learnerId: string): MemStudentLink | undefined {
+    for (const link of this.studentLinks.values()) {
+      if (link.learnerId === learnerId) {
+        return link;
+      }
+    }
+    return undefined;
+  }
+
+  private findMemStudentLinkByMembership(membershipId: string): MemStudentLink | undefined {
+    for (const link of this.studentLinks.values()) {
+      if (link.membershipId === membershipId) {
+        return link;
+      }
+    }
+    return undefined;
+  }
+
+  async registerStudentAccount(
+    input: RegisterStudentAccountInput
+  ): Promise<RegisterStudentAccountResult> {
+    const normalizedEmail = normalizeEmail(input.email);
+    const normalizedAdm = normalizeAdmissionNumber(input.admissionNumber);
+
+    const school = this.schools.get(input.schoolId);
+    if (!school || school.status === 'SUSPENDED' || !school.studentPortalEnabled) {
+      throw new DomainRuleError(
+        403,
+        'STUDENT_PORTAL_NOT_ENABLED',
+        'Student portal self-registration is not enabled for this school.'
+      );
+    }
+
+    for (const existing of this.users.values()) {
+      if (existing.email === normalizedEmail) {
+        throw new DomainRuleError(
+          409,
+          'ACCOUNT_EMAIL_CONFLICT',
+          'Unable to create a student account with this email address. Sign in if you have already registered, or contact your school office.'
+        );
+      }
+    }
+
+    if (input.verificationMode === 'ENROLMENT_CODE') {
+      if (!input.enrolmentCode) {
+        throw new DomainRuleError(
+          400,
+          'INVALID_ENROLMENT_VERIFICATION',
+          'Enrolment verification failed. Confirm your school, learner admission number, and active single-use enrolment code with your school office.'
+        );
+      }
+      const codeHash = hashEnrolmentCode(input.enrolmentCode);
+      const now = new Date();
+
+      const codeRecord = [...this.enrolmentCodes.values()].find(
+        (c) => c.schoolId === school.id && c.codeHash === codeHash
+      );
+      const learner = codeRecord ? this.learners.get(codeRecord.learnerId) : undefined;
+      const existingLearnerLink = learner
+        ? this.findMemStudentLinkByLearner(learner.id)
+        : undefined;
+
+      if (
+        !codeRecord ||
+        !learner ||
+        !learner.active ||
+        normalizeAdmissionNumber(learner.admissionNumber) !== normalizedAdm ||
+        codeRecord.revokedAt !== null ||
+        codeRecord.usedAt !== null ||
+        codeRecord.expiresAt.getTime() <= now.getTime() ||
+        existingLearnerLink !== undefined
+      ) {
+        throw new DomainRuleError(
+          400,
+          'INVALID_ENROLMENT_VERIFICATION',
+          'Enrolment verification failed. Confirm your school, learner admission number, and active single-use enrolment code with your school office.'
+        );
+      }
+
+      const user = this.seedUser({
+        email: normalizedEmail,
+        name: input.fullName,
+        passwordHash: input.passwordHash,
+        platformRole: 'STANDARD',
+        status: 'ACTIVE'
+      });
+
+      codeRecord.usedAt = now;
+      codeRecord.usedByUserId = user.id;
+
+      const membership = this.seedMembership({
+        schoolId: school.id,
+        userId: user.id,
+        role: 'STUDENT',
+        status: 'ACTIVE'
+      });
+
+      const link = this.seedStudentLink({
+        schoolId: school.id,
+        membershipId: membership.id,
+        learnerId: learner.id,
+        verificationMethod: 'ENROLMENT_CODE',
+        verifiedByMembershipId: codeRecord.createdByMembershipId,
+        verifiedAt: now
+      });
+
+      this.appendAudit({
+        schoolId: school.id,
+        actorUserId: user.id,
+        actorMembershipId: membership.id,
+        action: 'STUDENT_REGISTERED_VIA_CODE',
+        entityType: 'LearnerStudentLink',
+        entityId: link.id,
+        afterState: {
+          learnerId: learner.id,
+          verificationMethod: 'ENROLMENT_CODE'
+        },
+        metadata: {
+          enrolmentCodeId: codeRecord.id,
+          codeHint: codeRecord.codeHint
+        }
+      });
+
+      const hydrated = await this.findUserById(user.id);
+      if (!hydrated) {
+        throw new Error('Failed to load newly registered student user.');
+      }
+
+      return {
+        outcome: 'VERIFIED',
+        user: hydrated,
+        schoolCode: school.code,
+        requestId: null,
+        message: 'Student account verified and linked to your school academic record.'
+      };
+    }
+
+    const user = this.seedUser({
+      email: normalizedEmail,
+      name: input.fullName,
+      passwordHash: input.passwordHash,
+      platformRole: 'STANDARD',
+      status: 'ACTIVE'
+    });
+
+    const membership = this.seedMembership({
+      schoolId: school.id,
+      userId: user.id,
+      role: 'STUDENT',
+      status: 'INACTIVE'
+    });
+
+    const reqRecord = this.seedRegistrationRequest({
+      schoolId: school.id,
+      userId: user.id,
+      membershipId: membership.id,
+      claimedAdmissionNo: normalizedAdm,
+      claimedName: input.fullName,
+      claimedClassNote: input.classHint,
+      status: 'PENDING'
+    });
+
+    this.appendAudit({
+      schoolId: school.id,
+      actorUserId: user.id,
+      actorMembershipId: membership.id,
+      action: 'STUDENT_REGISTRATION_REQUESTED',
+      entityType: 'StudentRegistrationRequest',
+      entityId: reqRecord.id,
+      afterState: {
+        status: 'PENDING',
+        claimedAdmissionNo: normalizedAdm
+      }
+    });
+
+    const hydrated = await this.findUserById(user.id);
+    if (!hydrated) {
+      throw new Error('Failed to load newly created pending student user.');
+    }
+
+    return {
+      outcome: 'PENDING_APPROVAL',
+      user: hydrated,
+      schoolCode: school.code,
+      requestId: reqRecord.id,
+      message:
+        'Registration request submitted. Your school administration must verify your learner record before academic results become visible.'
+    };
+  }
+
+  private assertMemLeadership(access: SchoolAccessContext): void {
+    if (!hasAnyRole(access.roles, LEADERSHIP_ROLES)) {
+      throw new DomainRuleError(
+        403,
+        'FORBIDDEN',
+        'Only school leadership can manage learner enrolment and student portal verification.'
+      );
+    }
+  }
+
+  async getSchoolAdminPortalState(
+    access: SchoolAccessContext
+  ): Promise<SchoolAdminPortalStateDto | null> {
+    this.assertMemLeadership(access);
+    const scope = schoolScope(access);
+    const school = this.schools.get(scope.schoolId);
+    if (!school) {
+      return null;
+    }
+
+    const now = new Date();
+    const classes = [...this.classes.values()]
+      .filter((c) => c.schoolId === scope.schoolId)
+      .sort((a, b) => a.gradeLevel - b.gradeLevel || a.name.localeCompare(b.name));
+
+    const schoolLearners = [...this.learners.values()]
+      .filter((l) => l.schoolId === scope.schoolId)
+      .sort(
+        (a, b) =>
+          a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName)
+      );
+
+    const learnerByAdmission = new Map(
+      schoolLearners.map((l) => [normalizeAdmissionNumber(l.admissionNumber), l])
+    );
+
+    const learnersDto: AdminRosterLearnerDto[] = schoolLearners.map((l) => {
+      const cls = l.schoolClassId ? this.classes.get(l.schoolClassId) : undefined;
+      const link = this.findMemStudentLinkByLearner(l.id);
+      const linkedMem = link ? this.memberships.get(link.membershipId) : undefined;
+      const linkedUser = linkedMem ? this.users.get(linkedMem.userId) : undefined;
+
+      const activeCode = [...this.enrolmentCodes.values()]
+        .filter(
+          (c) =>
+            c.schoolId === scope.schoolId &&
+            c.learnerId === l.id &&
+            c.usedAt === null &&
+            c.revokedAt === null &&
+            c.expiresAt.getTime() > now.getTime()
+        )
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+
+      return {
+        id: l.id,
+        admissionNumber: l.admissionNumber,
+        firstName: l.firstName,
+        lastName: l.lastName,
+        schoolClassId: l.schoolClassId,
+        currentClassName: cls?.name ?? null,
+        gradeLevel: cls?.gradeLevel ?? null,
+        preferredChannel: l.preferredChannel,
+        active: l.active,
+        linkedStudent:
+          link && linkedUser
+            ? {
+                userId: linkedUser.id,
+                name: linkedUser.name,
+                email: linkedUser.email,
+                verificationMethod: link.verificationMethod,
+                verifiedAt: link.verifiedAt.toISOString()
+              }
+            : null,
+        activeEnrolmentCode: activeCode
+          ? {
+              id: activeCode.id,
+              codeHint: activeCode.codeHint,
+              expiresAt: activeCode.expiresAt.toISOString(),
+              createdAt: activeCode.createdAt.toISOString()
+            }
+          : null
+      };
+    });
+
+    const requestsDto: AdminRegistrationRequestDto[] = [
+      ...this.registrationRequests.values()
+    ]
+      .filter((r) => r.schoolId === scope.schoolId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((r) => {
+        const applicant = this.users.get(r.userId);
+        const suggested = learnerByAdmission.get(
+          normalizeAdmissionNumber(r.claimedAdmissionNo)
+        );
+        const suggestedCls = suggested?.schoolClassId
+          ? this.classes.get(suggested.schoolClassId)
+          : undefined;
+        return {
+          id: r.id,
+          userId: r.userId,
+          applicantEmail: applicant?.email ?? null,
+          claimedName: r.claimedName,
+          claimedAdmissionNo: r.claimedAdmissionNo,
+          claimedClassNote: r.claimedClassNote,
+          status: r.status,
+          decisionNotes: r.decisionNotes,
+          createdAt: r.createdAt.toISOString(),
+          reviewedAt: r.reviewedAt?.toISOString() ?? null,
+          reviewedByName: this.membershipUserName(r.reviewedByMembershipId),
+          approvedLearnerId: r.approvedLearnerId,
+          suggestedLearner: suggested
+            ? {
+                id: suggested.id,
+                admissionNumber: suggested.admissionNumber,
+                firstName: suggested.firstName,
+                lastName: suggested.lastName,
+                currentClassName: suggestedCls?.name ?? null,
+                alreadyLinked: this.findMemStudentLinkByLearner(suggested.id) !== undefined
+              }
+            : null
+        };
+      });
+
+    const announcementsDto: SchoolAnnouncementDto[] = [...this.announcements.values()]
+      .filter((a) => a.schoolId === scope.schoolId && a.active)
+      .sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime())
+      .map((a) => ({
+        id: a.id,
+        schoolId: a.schoolId,
+        title: a.title,
+        body: a.body,
+        audience: a.audience,
+        postedByName: this.membershipUserName(a.postedByMembershipId) ?? 'School Administration',
+        publishedAt: a.publishedAt.toISOString()
+      }));
+
+    return {
+      school: {
+        id: school.id,
+        code: school.code,
+        name: school.name,
+        sector: school.sector,
+        province: school.province,
+        district: school.district,
+        isSyntheticDemo: school.isSyntheticDemo,
+        status: school.status,
+        registrationNumber: school.registrationNumber,
+        levelSummary: school.levelSummary,
+        studentPortalEnabled: school.studentPortalEnabled
+      },
+      classes: classes.map((c) => ({
+        id: c.id,
+        name: c.name,
+        gradeLevel: c.gradeLevel,
+        academicYearLabel: this.academicYears.get(c.academicYearId)?.label ?? ''
+      })),
+      learners: learnersDto,
+      registrationRequests: requestsDto,
+      announcements: announcementsDto
+    };
+  }
+
+  async createSchoolLearner(
+    access: SchoolAccessContext,
+    input: {
+      admissionNumber: string;
+      firstName: string;
+      lastName: string;
+      schoolClassId: string;
+      preferredChannel: CommunicationChannel;
+    }
+  ): Promise<AdminRosterLearnerDto> {
+    this.assertMemLeadership(access);
+    const scope = schoolScope(access);
+    const normalizedAdm = normalizeAdmissionNumber(input.admissionNumber);
+
+    const cls = this.classes.get(input.schoolClassId);
+    if (!cls || cls.schoolId !== scope.schoolId) {
+      throw new DomainRuleError(
+        400,
+        'INVALID_SCHOOL_CLASS',
+        'Selected class does not belong to this school.'
+      );
+    }
+
+    const duplicate = [...this.learners.values()].find(
+      (l) =>
+        l.schoolId === scope.schoolId &&
+        normalizeAdmissionNumber(l.admissionNumber) === normalizedAdm
+    );
+    if (duplicate) {
+      throw new DomainRuleError(
+        409,
+        'DUPLICATE_ADMISSION_NUMBER',
+        `A learner with admission number ${normalizedAdm} already exists at this school.`
+      );
+    }
+
+    const created = this.seedLearner({
+      schoolId: scope.schoolId,
+      admissionNumber: normalizedAdm,
+      firstName: input.firstName.trim(),
+      lastName: input.lastName.trim(),
+      schoolClassId: cls.id,
+      preferredChannel: input.preferredChannel,
+      active: true
+    });
+
+    this.appendAudit({
+      schoolId: scope.schoolId,
+      actorUserId: access.actorUserId,
+      actorMembershipId: access.actorMembershipId,
+      action: 'LEARNER_CREATED',
+      entityType: 'Learner',
+      entityId: created.id,
+      afterState: {
+        admissionNumber: created.admissionNumber,
+        schoolClassId: cls.id
+      }
+    });
+
+    return {
+      id: created.id,
+      admissionNumber: created.admissionNumber,
+      firstName: created.firstName,
+      lastName: created.lastName,
+      schoolClassId: cls.id,
+      currentClassName: cls.name,
+      gradeLevel: cls.gradeLevel,
+      preferredChannel: created.preferredChannel,
+      active: created.active,
+      linkedStudent: null,
+      activeEnrolmentCode: null
+    };
+  }
+
+  async issueLearnerEnrolmentCode(
+    access: SchoolAccessContext,
+    learnerId: string,
+    expiresInDays: number
+  ): Promise<IssuedEnrolmentCodeDto> {
+    this.assertMemLeadership(access);
+    const scope = schoolScope(access);
+
+    const learner = this.learners.get(learnerId);
+    if (!learner || learner.schoolId !== scope.schoolId || !learner.active) {
+      throw new DomainRuleError(
+        404,
+        'LEARNER_NOT_FOUND',
+        'Active learner record not found in this school.'
+      );
+    }
+    if (this.findMemStudentLinkByLearner(learner.id)) {
+      throw new DomainRuleError(
+        409,
+        'LEARNER_ALREADY_LINKED',
+        'This learner already has a verified student portal account.'
+      );
+    }
+
+    const now = new Date();
+    for (const c of this.enrolmentCodes.values()) {
+      if (
+        c.schoolId === scope.schoolId &&
+        c.learnerId === learner.id &&
+        c.usedAt === null &&
+        c.revokedAt === null
+      ) {
+        c.revokedAt = now;
+        c.revokedByMembershipId = access.actorMembershipId;
+      }
+    }
+
+    const plainCode = generatePlainEnrolmentCode();
+    const expiresAt = new Date(now.getTime() + expiresInDays * 24 * 60 * 60 * 1000);
+    const createdCode = this.seedEnrolmentCode({
+      schoolId: scope.schoolId,
+      learnerId: learner.id,
+      plainCode,
+      expiresAt,
+      createdByMembershipId: access.actorMembershipId
+    });
+
+    this.appendAudit({
+      schoolId: scope.schoolId,
+      actorUserId: access.actorUserId,
+      actorMembershipId: access.actorMembershipId,
+      action: 'STUDENT_ENROLMENT_CODE_ISSUED',
+      entityType: 'StudentEnrolmentCode',
+      entityId: createdCode.id,
+      afterState: {
+        learnerId: learner.id,
+        codeHint: createdCode.codeHint,
+        expiresAt: expiresAt.toISOString()
+      }
+    });
+
+    return {
+      id: createdCode.id,
+      learnerId: learner.id,
+      admissionNumber: learner.admissionNumber,
+      learnerName: `${learner.firstName} ${learner.lastName}`,
+      plainCode,
+      codeHint: createdCode.codeHint,
+      expiresAt: expiresAt.toISOString()
+    };
+  }
+
+  async revokeLearnerEnrolmentCode(
+    access: SchoolAccessContext,
+    codeId: string
+  ): Promise<void> {
+    this.assertMemLeadership(access);
+    const scope = schoolScope(access);
+    const codeRecord = this.enrolmentCodes.get(codeId);
+    if (!codeRecord || codeRecord.schoolId !== scope.schoolId) {
+      throw new DomainRuleError(
+        404,
+        'ENROLMENT_CODE_NOT_FOUND',
+        'Enrolment code not found in this school.'
+      );
+    }
+    if (codeRecord.usedAt || codeRecord.revokedAt) {
+      throw new DomainRuleError(
+        409,
+        'ENROLMENT_CODE_INACTIVE',
+        'Enrolment code has already been used or revoked.'
+      );
+    }
+
+    const now = new Date();
+    codeRecord.revokedAt = now;
+    codeRecord.revokedByMembershipId = access.actorMembershipId;
+
+    this.appendAudit({
+      schoolId: scope.schoolId,
+      actorUserId: access.actorUserId,
+      actorMembershipId: access.actorMembershipId,
+      action: 'STUDENT_ENROLMENT_CODE_REVOKED',
+      entityType: 'StudentEnrolmentCode',
+      entityId: codeRecord.id,
+      afterState: { revokedAt: now.toISOString() }
+    });
+  }
+
+  async approveStudentRegistrationRequest(
+    access: SchoolAccessContext,
+    requestId: string,
+    input: { learnerId: string; decisionNotes: string | null }
+  ): Promise<AdminRegistrationRequestDto> {
+    this.assertMemLeadership(access);
+    const scope = schoolScope(access);
+    const now = new Date();
+
+    const reqRecord = this.registrationRequests.get(requestId);
+    if (!reqRecord || reqRecord.schoolId !== scope.schoolId) {
+      throw new DomainRuleError(
+        404,
+        'REGISTRATION_REQUEST_NOT_FOUND',
+        'Student registration request not found in this school.'
+      );
+    }
+    if (reqRecord.status !== 'PENDING') {
+      throw new DomainRuleError(
+        409,
+        'REGISTRATION_REQUEST_ALREADY_DECIDED',
+        `Registration request has already been ${reqRecord.status.toLowerCase()}.`
+      );
+    }
+    if (reqRecord.userId === access.actorUserId) {
+      throw new DomainRuleError(
+        403,
+        'SELF_APPROVAL_FORBIDDEN',
+        'You cannot approve your own registration request.'
+      );
+    }
+
+    const learner = this.learners.get(input.learnerId);
+    if (!learner || learner.schoolId !== scope.schoolId || !learner.active) {
+      throw new DomainRuleError(
+        404,
+        'LEARNER_NOT_FOUND',
+        'Selected learner record not found or inactive in this school.'
+      );
+    }
+    if (this.findMemStudentLinkByLearner(learner.id)) {
+      throw new DomainRuleError(
+        409,
+        'LEARNER_ALREADY_LINKED',
+        'Selected learner record is already linked to another student account.'
+      );
+    }
+    if (this.findMemStudentLinkByMembership(reqRecord.membershipId)) {
+      throw new DomainRuleError(
+        409,
+        'STUDENT_ALREADY_LINKED',
+        'This student account is already linked to a learner record.'
+      );
+    }
+
+    const membership = this.memberships.get(reqRecord.membershipId);
+    if (membership) {
+      membership.role = 'STUDENT';
+      membership.status = 'ACTIVE';
+    }
+
+    const link = this.seedStudentLink({
+      schoolId: scope.schoolId,
+      membershipId: reqRecord.membershipId,
+      learnerId: learner.id,
+      verificationMethod: 'STAFF_APPROVAL',
+      verifiedByMembershipId: access.actorMembershipId,
+      verifiedAt: now
+    });
+
+    for (const c of this.enrolmentCodes.values()) {
+      if (
+        c.schoolId === scope.schoolId &&
+        c.learnerId === learner.id &&
+        c.usedAt === null &&
+        c.revokedAt === null
+      ) {
+        c.revokedAt = now;
+        c.revokedByMembershipId = access.actorMembershipId;
+      }
+    }
+
+    reqRecord.status = 'APPROVED';
+    reqRecord.approvedLearnerId = learner.id;
+    reqRecord.reviewedByMembershipId = access.actorMembershipId;
+    reqRecord.reviewedAt = now;
+    reqRecord.decisionNotes = input.decisionNotes;
+
+    this.appendAudit({
+      schoolId: scope.schoolId,
+      actorUserId: access.actorUserId,
+      actorMembershipId: access.actorMembershipId,
+      action: 'STUDENT_REGISTRATION_APPROVED',
+      entityType: 'StudentRegistrationRequest',
+      entityId: reqRecord.id,
+      beforeState: { status: 'PENDING' },
+      afterState: {
+        status: 'APPROVED',
+        learnerId: learner.id,
+        studentLinkId: link.id
+      }
+    });
+
+    const applicant = this.users.get(reqRecord.userId);
+    const cls = learner.schoolClassId ? this.classes.get(learner.schoolClassId) : undefined;
+
+    return {
+      id: reqRecord.id,
+      userId: reqRecord.userId,
+      applicantEmail: applicant?.email ?? null,
+      claimedName: reqRecord.claimedName,
+      claimedAdmissionNo: reqRecord.claimedAdmissionNo,
+      claimedClassNote: reqRecord.claimedClassNote,
+      status: reqRecord.status,
+      decisionNotes: reqRecord.decisionNotes,
+      createdAt: reqRecord.createdAt.toISOString(),
+      reviewedAt: reqRecord.reviewedAt.toISOString(),
+      reviewedByName: this.membershipUserName(access.actorMembershipId),
+      approvedLearnerId: learner.id,
+      suggestedLearner: {
+        id: learner.id,
+        admissionNumber: learner.admissionNumber,
+        firstName: learner.firstName,
+        lastName: learner.lastName,
+        currentClassName: cls?.name ?? null,
+        alreadyLinked: true
+      }
+    };
+  }
+
+  async rejectStudentRegistrationRequest(
+    access: SchoolAccessContext,
+    requestId: string,
+    input: { decisionNotes: string }
+  ): Promise<AdminRegistrationRequestDto> {
+    this.assertMemLeadership(access);
+    const scope = schoolScope(access);
+    const now = new Date();
+
+    const reqRecord = this.registrationRequests.get(requestId);
+    if (!reqRecord || reqRecord.schoolId !== scope.schoolId) {
+      throw new DomainRuleError(
+        404,
+        'REGISTRATION_REQUEST_NOT_FOUND',
+        'Student registration request not found in this school.'
+      );
+    }
+    if (reqRecord.status !== 'PENDING') {
+      throw new DomainRuleError(
+        409,
+        'REGISTRATION_REQUEST_ALREADY_DECIDED',
+        `Registration request has already been ${reqRecord.status.toLowerCase()}.`
+      );
+    }
+
+    const membership = this.memberships.get(reqRecord.membershipId);
+    if (membership) {
+      membership.status = 'INACTIVE';
+    }
+
+    reqRecord.status = 'REJECTED';
+    reqRecord.reviewedByMembershipId = access.actorMembershipId;
+    reqRecord.reviewedAt = now;
+    reqRecord.decisionNotes = input.decisionNotes;
+
+    this.appendAudit({
+      schoolId: scope.schoolId,
+      actorUserId: access.actorUserId,
+      actorMembershipId: access.actorMembershipId,
+      action: 'STUDENT_REGISTRATION_REJECTED',
+      entityType: 'StudentRegistrationRequest',
+      entityId: reqRecord.id,
+      beforeState: { status: 'PENDING' },
+      afterState: {
+        status: 'REJECTED',
+        decisionNotes: input.decisionNotes
+      }
+    });
+
+    const applicant = this.users.get(reqRecord.userId);
+    return {
+      id: reqRecord.id,
+      userId: reqRecord.userId,
+      applicantEmail: applicant?.email ?? null,
+      claimedName: reqRecord.claimedName,
+      claimedAdmissionNo: reqRecord.claimedAdmissionNo,
+      claimedClassNote: reqRecord.claimedClassNote,
+      status: reqRecord.status,
+      decisionNotes: reqRecord.decisionNotes,
+      createdAt: reqRecord.createdAt.toISOString(),
+      reviewedAt: reqRecord.reviewedAt.toISOString(),
+      reviewedByName: this.membershipUserName(access.actorMembershipId),
+      approvedLearnerId: null,
+      suggestedLearner: null
+    };
+  }
+
+  async createSchoolAnnouncement(
+    access: SchoolAccessContext,
+    input: { title: string; body: string; audience: AnnouncementAudience }
+  ): Promise<SchoolAnnouncementDto> {
+    this.assertMemLeadership(access);
+    const scope = schoolScope(access);
+
+    const created = this.seedAnnouncement({
+      schoolId: scope.schoolId,
+      title: input.title.trim(),
+      body: input.body.trim(),
+      audience: input.audience,
+      postedByMembershipId: access.actorMembershipId,
+      active: true
+    });
+
+    this.appendAudit({
+      schoolId: scope.schoolId,
+      actorUserId: access.actorUserId,
+      actorMembershipId: access.actorMembershipId,
+      action: 'SCHOOL_ANNOUNCEMENT_POSTED',
+      entityType: 'SchoolAnnouncement',
+      entityId: created.id,
+      afterState: {
+        title: created.title,
+        audience: created.audience
+      }
+    });
+
+    return {
+      id: created.id,
+      schoolId: created.schoolId,
+      title: created.title,
+      body: created.body,
+      audience: created.audience,
+      postedByName:
+        this.membershipUserName(created.postedByMembershipId) ?? 'School Administration',
+      publishedAt: created.publishedAt.toISOString()
+    };
+  }
+
+  async getStudentPortalOverview(userId: string): Promise<StudentPortalOverviewDto> {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new DomainRuleError(404, 'USER_NOT_FOUND', 'Student user not found.');
+    }
+
+    const memberships = [...this.memberships.values()]
+      .filter((m) => m.userId === userId && m.role === 'STUDENT')
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+    const accounts: StudentPortalAccountDto[] = [];
+
+    for (const m of memberships) {
+      const school = this.schools.get(m.schoolId);
+      if (!school) continue;
+
+      const schoolSummary = {
+        id: school.id,
+        code: school.code,
+        name: school.name,
+        sector: school.sector,
+        province: school.province,
+        district: school.district,
+        isSyntheticDemo: school.isSyntheticDemo,
+        status: school.status,
+        registrationNumber: school.registrationNumber,
+        levelSummary: school.levelSummary,
+        phone: school.phone,
+        email: school.email
+      };
+
+      const latestReq = [...this.registrationRequests.values()]
+        .filter((r) => r.membershipId === m.id)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+
+      const studentLink = this.findMemStudentLinkByMembership(m.id);
+      const learner = studentLink ? this.learners.get(studentLink.learnerId) : undefined;
+
+      if (m.status !== 'ACTIVE' || !studentLink || !learner || !learner.active) {
+        const verificationState =
+          latestReq?.status === 'REJECTED' ? 'REJECTED' : 'PENDING_APPROVAL';
+        accounts.push({
+          membershipId: m.id,
+          school: schoolSummary,
+          verificationState,
+          learner: null,
+          pendingRequest: latestReq
+            ? {
+                id: latestReq.id,
+                claimedAdmissionNo: latestReq.claimedAdmissionNo,
+                claimedClassNote: latestReq.claimedClassNote,
+                status: latestReq.status,
+                decisionNotes: latestReq.decisionNotes,
+                createdAt: latestReq.createdAt.toISOString(),
+                reviewedAt: latestReq.reviewedAt?.toISOString() ?? null
+              }
+            : null,
+          termResults: [],
+          announcements: []
+        });
+        continue;
+      }
+
+      const currentClass = learner.schoolClassId
+        ? this.classes.get(learner.schoolClassId)
+        : undefined;
+      const classYear = currentClass
+        ? this.academicYears.get(currentClass.academicYearId)
+        : undefined;
+      const currentYear = [...this.academicYears.values()].find(
+        (yr) => yr.schoolId === school.id && yr.isCurrent
+      );
+      const currentTerm = [...this.academicTerms.values()].find(
+        (trm) => trm.schoolId === school.id && trm.isCurrent
+      );
+
+      const classPacks = learner.schoolClassId
+        ? [...this.resultPacks.values()]
+            .filter(
+              (p) =>
+                p.schoolId === school.id && p.schoolClassId === learner.schoolClassId
+            )
+            .sort((a, b) => {
+              const termA = this.academicTerms.get(a.academicTermId)?.startsOn.getTime() ?? 0;
+              const termB = this.academicTerms.get(b.academicTermId)?.startsOn.getTime() ?? 0;
+              return termB - termA;
+            })
+        : [];
+
+      const termResults: StudentTermResultStatusDto[] = [];
+      for (const pack of classPacks) {
+        const term = this.academicTerms.get(pack.academicTermId);
+        const year = term ? this.academicYears.get(term.academicYearId) : undefined;
+        const cls = this.classes.get(pack.schoolClassId);
+        if (!term || !year || !cls) continue;
+
+        if (pack.status !== 'PUBLISHED') {
+          termResults.push({
+            packId: pack.id,
+            academicYearLabel: year.label,
+            academicTermLabel: term.label,
+            termNumber: term.termNumber,
+            className: cls.name,
+            gradeLevel: cls.gradeLevel,
+            publicationState: 'UNPUBLISHED',
+            statusMessage: 'Results not yet published by school administration.',
+            publishedAt: null,
+            reportCard: null
+          });
+          continue;
+        }
+
+        const classAllocations = [...this.allocations.values()]
+          .filter((a) => a.schoolId === school.id && a.schoolClassId === cls.id)
+          .sort((a, b) => {
+            const codeA = this.subjects.get(a.subjectId)?.code ?? '';
+            const codeB = this.subjects.get(b.subjectId)?.code ?? '';
+            return codeA.localeCompare(codeB);
+          });
+
+        const subjectLines: ReportCardSubjectLineDto[] = [];
+        let complete = true;
+
+        for (const alloc of classAllocations) {
+          const mark = this.subjectMarks.get(
+            `${pack.id}:${learner.id}:${alloc.subjectId}`
+          );
+          if (!mark || mark.status === 'PENDING') {
+            complete = false;
+            break;
+          }
+          const sub = this.subjects.get(alloc.subjectId)!;
+          subjectLines.push({
+            subjectId: sub.id,
+            subjectCode: sub.code,
+            subjectName: sub.name,
+            status: mark.status,
+            score: mark.score,
+            maxMark: sub.maxMark,
+            ...computeSubjectGrade(mark.status, mark.score, sub.maxMark),
+            teacherComment: mark.teacherComment,
+            teacherName:
+              this.membershipUserName(alloc.teacherMembershipId) ?? 'Assigned Teacher'
+          });
+        }
+
+        if (!complete || subjectLines.length === 0) {
+          termResults.push({
+            packId: pack.id,
+            academicYearLabel: year.label,
+            academicTermLabel: term.label,
+            termNumber: term.termNumber,
+            className: cls.name,
+            gradeLevel: cls.gradeLevel,
+            publicationState: 'UNPUBLISHED',
+            statusMessage: 'Results not yet published by school administration.',
+            publishedAt: null,
+            reportCard: null
+          });
+          continue;
+        }
+
+        const reportCard: ReportCardDto = {
+          school: {
+            id: school.id,
+            code: school.code,
+            name: school.name,
+            sector: school.sector,
+            province: school.province,
+            district: school.district,
+            isSyntheticDemo: school.isSyntheticDemo,
+            status: school.status,
+            phone: school.phone,
+            timezone: school.timezone
+          },
+          publicationState: 'PUBLISHED',
+          academicYearLabel: year.label,
+          academicTermLabel: term.label,
+          termNumber: term.termNumber,
+          className: cls.name,
+          gradeLevel: cls.gradeLevel,
+          classTeacherName: this.membershipUserName(cls.classTeacherMembershipId),
+          approvedByName: this.membershipUserName(pack.approvedByMembershipId),
+          approvedAt: pack.approvedAt ? pack.approvedAt.toISOString() : null,
+          publishedAt: pack.publishedAt ? pack.publishedAt.toISOString() : null,
+          learner: {
+            id: learner.id,
+            admissionNumber: learner.admissionNumber,
+            firstName: learner.firstName,
+            lastName: learner.lastName,
+            guardianName: learner.guardianName,
+            preferredChannel: learner.preferredChannel
+          },
+          subjects: subjectLines,
+          summary: computeReportSummary(subjectLines)
+        };
+
+        termResults.push({
+          packId: pack.id,
+          academicYearLabel: year.label,
+          academicTermLabel: term.label,
+          termNumber: term.termNumber,
+          className: cls.name,
+          gradeLevel: cls.gradeLevel,
+          publicationState: 'PUBLISHED',
+          statusMessage: 'Official term results published.',
+          publishedAt: reportCard.publishedAt,
+          reportCard
+        });
+      }
+
+      const schoolAnnouncements: SchoolAnnouncementDto[] = [...this.announcements.values()]
+        .filter(
+          (a) =>
+            a.schoolId === school.id &&
+            a.active &&
+            a.audience === 'STUDENTS_AND_STAFF'
+        )
+        .sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime())
+        .slice(0, 20)
+        .map((a) => ({
+          id: a.id,
+          schoolId: a.schoolId,
+          title: a.title,
+          body: a.body,
+          audience: a.audience,
+          postedByName:
+            this.membershipUserName(a.postedByMembershipId) ?? 'School Administration',
+          publishedAt: a.publishedAt.toISOString()
+        }));
+
+      accounts.push({
+        membershipId: m.id,
+        school: schoolSummary,
+        verificationState: 'VERIFIED',
+        learner: {
+          id: learner.id,
+          admissionNumber: learner.admissionNumber,
+          firstName: learner.firstName,
+          lastName: learner.lastName,
+          currentClassName: currentClass?.name ?? null,
+          gradeLevel: currentClass?.gradeLevel ?? null,
+          currentAcademicYearLabel: classYear?.label ?? currentYear?.label ?? null,
+          currentTermLabel: currentTerm?.label ?? null,
+          verificationMethod: studentLink.verificationMethod,
+          verifiedAt: studentLink.verifiedAt.toISOString()
+        },
+        pendingRequest: null,
+        termResults,
+        announcements: schoolAnnouncements
+      });
+    }
+
+    return {
+      studentUser: {
+        id: user.id,
+        name: user.name,
+        email: user.email
+      },
+      accounts
+    };
+  }
+
+  async getReportCardForStudent(
+    access: SchoolAccessContext,
+    packId: string,
+    learnerId: string
+  ): Promise<ReportCardDto | null> {
+    if (!access.roles.includes('STUDENT')) {
+      throw new DomainRuleError(
+        403,
+        'FORBIDDEN',
+        'Student report card endpoint requires a verified student school membership.'
+      );
+    }
+    const scope = schoolScope(access);
+
+    const studentLink = this.findMemStudentLinkByMembership(access.actorMembershipId);
+    const learner = studentLink ? this.learners.get(studentLink.learnerId) : undefined;
+
+    if (
+      !studentLink ||
+      studentLink.schoolId !== scope.schoolId ||
+      !learner ||
+      !learner.active ||
+      learner.id !== learnerId
+    ) {
+      throw new DomainRuleError(
+        403,
+        'FORBIDDEN_LEARNER_ACCESS',
+        'Students may only access their own verified academic record.'
+      );
+    }
+
+    const school = this.schools.get(scope.schoolId);
+    const pack = this.resultPacks.get(packId);
+    if (!school || !pack || pack.schoolId !== scope.schoolId) {
+      return null;
+    }
+
+    if (pack.status !== 'PUBLISHED') {
+      throw new DomainRuleError(
+        403,
+        'RESULT_NOT_PUBLISHED',
+        'This term result pack has not yet been published by school administration.'
+      );
+    }
+
+    const term = this.academicTerms.get(pack.academicTermId);
+    const year = term ? this.academicYears.get(term.academicYearId) : undefined;
+    const cls = this.classes.get(pack.schoolClassId);
+    if (!term || !year || !cls) {
+      return null;
+    }
+
+    const classAllocations = [...this.allocations.values()]
+      .filter((a) => a.schoolId === scope.schoolId && a.schoolClassId === cls.id)
+      .sort((a, b) => {
+        const codeA = this.subjects.get(a.subjectId)?.code ?? '';
+        const codeB = this.subjects.get(b.subjectId)?.code ?? '';
+        return codeA.localeCompare(codeB);
+      });
+
+    const subjectLines: ReportCardSubjectLineDto[] = [];
+    for (const alloc of classAllocations) {
+      const mark = this.subjectMarks.get(`${pack.id}:${learner.id}:${alloc.subjectId}`);
+      if (!mark || mark.status === 'PENDING') {
+        throw new DomainRuleError(
+          403,
+          'RESULT_NOT_PUBLISHED',
+          'Results for this student record are not complete for publication.'
+        );
+      }
+      const sub = this.subjects.get(alloc.subjectId)!;
+      subjectLines.push({
+        subjectId: sub.id,
+        subjectCode: sub.code,
+        subjectName: sub.name,
+        status: mark.status,
+        score: mark.score,
+        maxMark: sub.maxMark,
+        ...computeSubjectGrade(mark.status, mark.score, sub.maxMark),
+        teacherComment: mark.teacherComment,
+        teacherName:
+          this.membershipUserName(alloc.teacherMembershipId) ?? 'Assigned Teacher'
+      });
+    }
+
+    if (subjectLines.length === 0) {
+      return null;
+    }
+
+    return {
+      school: {
+        id: school.id,
+        code: school.code,
+        name: school.name,
+        sector: school.sector,
+        province: school.province,
+        district: school.district,
+        isSyntheticDemo: school.isSyntheticDemo,
+        status: school.status,
+        phone: school.phone,
+        timezone: school.timezone
+      },
+      publicationState: 'PUBLISHED',
+      academicYearLabel: year.label,
+      academicTermLabel: term.label,
+      termNumber: term.termNumber,
+      className: cls.name,
+      gradeLevel: cls.gradeLevel,
+      classTeacherName: this.membershipUserName(cls.classTeacherMembershipId),
+      approvedByName: this.membershipUserName(pack.approvedByMembershipId),
+      approvedAt: pack.approvedAt ? pack.approvedAt.toISOString() : null,
+      publishedAt: pack.publishedAt ? pack.publishedAt.toISOString() : null,
+      learner: {
+        id: learner.id,
+        admissionNumber: learner.admissionNumber,
+        firstName: learner.firstName,
+        lastName: learner.lastName,
+        guardianName: learner.guardianName,
+        preferredChannel: learner.preferredChannel
+      },
+      subjects: subjectLines,
+      summary: computeReportSummary(subjectLines)
+    };
   }
 }

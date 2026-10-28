@@ -7,7 +7,8 @@ export type SchoolRole =
   | 'HEAD_TEACHER'
   | 'DEPUTY_HEAD'
   | 'TEACHER'
-  | 'PARENT_GUARDIAN';
+  | 'PARENT_GUARDIAN'
+  | 'STUDENT';
 export type MembershipStatus = 'ACTIVE' | 'INACTIVE';
 export type TermNumber = 'TERM_1' | 'TERM_2' | 'TERM_3';
 export type ResultPackStatus =
@@ -18,6 +19,9 @@ export type ResultPackStatus =
   | 'PUBLISHED';
 export type MarkEntryStatus = 'PENDING' | 'PRESENT' | 'ABSENT' | 'EXEMPT';
 export type CommunicationChannel = 'PRINT_REPORT' | 'SMS_SUMMARY' | 'GUARDIAN_PORTAL';
+export type StudentVerificationMethod = 'ENROLMENT_CODE' | 'STAFF_APPROVAL';
+export type StudentRegistrationStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type AnnouncementAudience = 'STUDENTS_AND_STAFF' | 'STAFF_ONLY';
 
 export interface SchoolSummary {
   id: string;
@@ -28,6 +32,25 @@ export interface SchoolSummary {
   district: string;
   isSyntheticDemo: boolean;
   status: SchoolStatus;
+}
+
+export interface PublicSchoolProfile {
+  id: string;
+  code: string;
+  registrationNumber: string | null;
+  name: string;
+  sector: SchoolSector;
+  province: string;
+  district: string;
+  levelSummary: string | null;
+  publicDescription: string | null;
+  phone: string | null;
+  email: string | null;
+  status: SchoolStatus;
+  isSyntheticDemo: boolean;
+  studentPortalEnabled: boolean;
+  canSelfRegister: boolean;
+  currentAcademicYearLabel: string | null;
 }
 
 export interface MembershipSummary {
@@ -70,6 +93,11 @@ export interface SandboxPersona {
 export interface SandboxPersonasResponse {
   syntheticOnly: boolean;
   credentialHint: string;
+  demoEnrolmentWalkthrough?: {
+    schoolCode: string;
+    admissionNumber: string;
+    enrolmentCode: string;
+  };
   personas: SandboxPersona[];
 }
 
@@ -203,6 +231,8 @@ export interface ReportCardSubjectLine {
   status: Exclude<MarkEntryStatus, 'PENDING'>;
   score: number | null;
   maxMark: number;
+  percentage: number | null;
+  grade: string;
   teacherComment: string | null;
   teacherName: string;
 }
@@ -272,4 +302,167 @@ export interface AuditEventItem {
   afterState: Record<string, unknown> | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
+}
+
+export interface StudentRegistrationPayload {
+  schoolId: string;
+  fullName: string;
+  admissionNumber: string;
+  email: string;
+  password: string;
+  verificationMode: StudentVerificationMethod;
+  enrolmentCode?: string | null;
+  classHint?: string | null;
+}
+
+export interface StudentRegistrationResponse {
+  outcome: 'VERIFIED' | 'PENDING_APPROVAL';
+  schoolCode: string;
+  requestId: string | null;
+  message: string;
+  user: AuthenticatedUserProfile;
+  memberships: MembershipSummary[];
+  csrfToken: string;
+  sandboxSessionToken?: string;
+}
+
+export interface SchoolAnnouncementItem {
+  id: string;
+  schoolId: string;
+  title: string;
+  body: string;
+  audience: AnnouncementAudience;
+  postedByName: string;
+  publishedAt: string;
+}
+
+export interface IssuedEnrolmentCode {
+  id: string;
+  learnerId: string;
+  admissionNumber: string;
+  learnerName: string;
+  plainCode: string;
+  codeHint: string;
+  expiresAt: string;
+}
+
+export interface AdminRosterLearner {
+  id: string;
+  admissionNumber: string;
+  firstName: string;
+  lastName: string;
+  schoolClassId: string | null;
+  currentClassName: string | null;
+  gradeLevel: number | null;
+  preferredChannel: CommunicationChannel;
+  active: boolean;
+  linkedStudent: {
+    userId: string;
+    name: string;
+    email: string | null;
+    verificationMethod: StudentVerificationMethod;
+    verifiedAt: string;
+  } | null;
+  activeEnrolmentCode: {
+    id: string;
+    codeHint: string;
+    expiresAt: string;
+    createdAt: string;
+  } | null;
+}
+
+export interface AdminRegistrationRequest {
+  id: string;
+  userId: string;
+  applicantEmail: string | null;
+  claimedName: string;
+  claimedAdmissionNo: string;
+  claimedClassNote: string | null;
+  status: StudentRegistrationStatus;
+  decisionNotes: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+  reviewedByName: string | null;
+  approvedLearnerId: string | null;
+  suggestedLearner: {
+    id: string;
+    admissionNumber: string;
+    firstName: string;
+    lastName: string;
+    currentClassName: string | null;
+    alreadyLinked: boolean;
+  } | null;
+}
+
+export interface SchoolAdminPortalState {
+  school: SchoolSummary & {
+    registrationNumber: string | null;
+    levelSummary: string | null;
+    studentPortalEnabled: boolean;
+  };
+  classes: Array<{
+    id: string;
+    name: string;
+    gradeLevel: number;
+    academicYearLabel: string;
+  }>;
+  learners: AdminRosterLearner[];
+  registrationRequests: AdminRegistrationRequest[];
+  announcements: SchoolAnnouncementItem[];
+}
+
+export interface StudentTermResultStatus {
+  packId: string;
+  academicYearLabel: string;
+  academicTermLabel: string;
+  termNumber: TermNumber;
+  className: string;
+  gradeLevel: number;
+  publicationState: 'PUBLISHED' | 'UNPUBLISHED';
+  statusMessage: string;
+  publishedAt: string | null;
+  reportCard: ReportCard | null;
+}
+
+export interface StudentPortalAccount {
+  membershipId: string;
+  school: SchoolSummary & {
+    registrationNumber: string | null;
+    levelSummary: string | null;
+    phone: string | null;
+    email: string | null;
+  };
+  verificationState: 'VERIFIED' | 'PENDING_APPROVAL' | 'REJECTED';
+  learner: {
+    id: string;
+    admissionNumber: string;
+    firstName: string;
+    lastName: string;
+    currentClassName: string | null;
+    gradeLevel: number | null;
+    currentAcademicYearLabel: string | null;
+    currentTermLabel: string | null;
+    verificationMethod: StudentVerificationMethod;
+    verifiedAt: string;
+  } | null;
+  pendingRequest: {
+    id: string;
+    claimedAdmissionNo: string;
+    claimedClassNote: string | null;
+    status: StudentRegistrationStatus;
+    decisionNotes: string | null;
+    createdAt: string;
+    reviewedAt: string | null;
+  } | null;
+  termResults: StudentTermResultStatus[];
+  announcements: SchoolAnnouncementItem[];
+}
+
+export interface StudentPortalOverview {
+  studentUser: {
+    id: string;
+    name: string;
+    email: string | null;
+  };
+  accounts: StudentPortalAccount[];
 }

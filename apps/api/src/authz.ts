@@ -9,7 +9,8 @@ export type SchoolRole =
   | 'HEAD_TEACHER'
   | 'DEPUTY_HEAD'
   | 'TEACHER'
-  | 'PARENT_GUARDIAN';
+  | 'PARENT_GUARDIAN'
+  | 'STUDENT';
 export type MembershipStatus = 'ACTIVE' | 'INACTIVE';
 
 export const STAFF_ROLES: readonly SchoolRole[] = [
@@ -179,7 +180,8 @@ export function requireSchoolRole(...allowedRoles: SchoolRole[]) {
       HEAD_TEACHER: 2,
       DEPUTY_HEAD: 3,
       TEACHER: 4,
-      PARENT_GUARDIAN: 5
+      PARENT_GUARDIAN: 5,
+      STUDENT: 6
     };
     const sorted = [...matchingMemberships].sort(
       (a, b) => rolePriority[a.role] - rolePriority[b.role]

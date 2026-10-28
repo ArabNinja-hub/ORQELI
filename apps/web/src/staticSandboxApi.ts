@@ -1,8 +1,12 @@
 import type {
+  AdminRegistrationRequest,
+  AdminRosterLearner,
+  AnnouncementAudience,
   AuditEventItem,
   AuthenticatedUserProfile,
   CommunicationChannel,
   GuardianResultsOverview,
+  IssuedEnrolmentCode,
   MarkEntryStatus,
   MembershipStatus,
   MembershipSummary,
@@ -10,6 +14,7 @@ import type {
   PackLearnerRow,
   PackMarkCell,
   PackSubjectColumn,
+  PublicSchoolProfile,
   ReportCard,
   ReportCardSubjectLine,
   ResultPackDetail,
@@ -17,11 +22,18 @@ import type {
   ResultPackSummary,
   SandboxPersona,
   SandboxPersonasResponse,
+  SchoolAdminPortalState,
+  SchoolAnnouncementItem,
   SchoolOverview,
   SchoolRole,
   SchoolSector,
   SchoolStatus,
   SchoolSummary,
+  StudentPortalAccount,
+  StudentPortalOverview,
+  StudentRegistrationStatus,
+  StudentTermResultStatus,
+  StudentVerificationMethod,
   TermNumber
 } from './types';
 
@@ -34,7 +46,9 @@ import type {
  */
 
 export const STATIC_SANDBOX_CREDENTIAL = 'SyntheticDemo!2026';
-const STORAGE_KEY = 'orqeli.static_sandbox.state.v1';
+export const STATIC_DEMO_ENROLMENT_CODE = 'ORQ-8B02-2026';
+export const STATIC_DEMO_ENROLMENT_ADMISSION_NO = 'SYN-2026-0802';
+const STORAGE_KEY = 'orqeli.static_sandbox.state.v2';
 const STATIC_CSRF_TOKEN = 'static-pages-sandbox-csrf-token';
 
 const STAFF_ROLES: readonly SchoolRole[] = [
@@ -51,6 +65,36 @@ const LEADERSHIP_ROLES: readonly SchoolRole[] = [
 const APPROVAL_ROLES: readonly SchoolRole[] = ['SCHOOL_ADMIN', 'HEAD_TEACHER'];
 
 const STATIC_SANDBOX_PERSONAS: SandboxPersona[] = [
+  {
+    label: 'Verified Student (OPUS-Style Portal)',
+    name: 'Lubasi Phiri (Synthetic Student)',
+    email: 'student.lubasi@synthetic.orqeli.invalid',
+    role: 'STUDENT',
+    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
+    schoolCode: 'SYN-ZM-LUS-01',
+    purpose:
+      'Open the verified Grade 8B student portal, inspect published Term 2 subject marks & grades, print the A4 report card, and confirm Term 3 unpublished marks stay hidden.'
+  },
+  {
+    label: 'Pending Student (Awaiting Approval)',
+    name: 'Bupe Kasonde (Synthetic Applicant)',
+    email: 'student.pending@synthetic.orqeli.invalid',
+    role: 'STUDENT',
+    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
+    schoolCode: 'SYN-ZM-LUS-01',
+    purpose:
+      'Sign in before school verification is complete to inspect the pending approval status view with zero access to academic records.'
+  },
+  {
+    label: 'Head Teacher (Admin & Approver)',
+    name: 'Mrs. Mutale Mulenga (Synthetic)',
+    email: 'head.mulenga@synthetic.orqeli.invalid',
+    role: 'HEAD_TEACHER',
+    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
+    schoolCode: 'SYN-ZM-LUS-01',
+    purpose:
+      'Manage learner roster, issue/revoke single-use enrolment codes, approve pending student requests, post announcements, and approve/publish term result packs.'
+  },
   {
     label: 'Subject & Class Teacher',
     name: 'Mr. Chanda Banda (Synthetic)',
@@ -69,27 +113,7 @@ const STATIC_SANDBOX_PERSONAS: SandboxPersona[] = [
     schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
     schoolCode: 'SYN-ZM-LUS-01',
     purpose:
-      'Inspect school-wide completeness, review submitted packs, return packs for correction with notes, and inspect audit events.'
-  },
-  {
-    label: 'Head Teacher (Approver)',
-    name: 'Mrs. Mutale Mulenga (Synthetic)',
-    email: 'head.mulenga@synthetic.orqeli.invalid',
-    role: 'HEAD_TEACHER',
-    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
-    schoolCode: 'SYN-ZM-LUS-01',
-    purpose:
-      'Perform final approval and publication of complete result packs and generate printable A4 report cards.'
-  },
-  {
-    label: 'Parent / Guardian',
-    name: 'Mr. Kelvin Phiri (Synthetic)',
-    email: 'guardian.phiri@synthetic.orqeli.invalid',
-    role: 'PARENT_GUARDIAN',
-    schoolName: 'Lukanga Day Secondary (Synthetic Demo)',
-    schoolCode: 'SYN-ZM-LUS-01',
-    purpose:
-      'View strictly PUBLISHED learner report cards only; unpublished Grade 9A marks remain completely hidden.'
+      'Inspect school-wide completeness, review submitted packs, return packs for correction with notes, and manage student verification.'
   },
   {
     label: 'Second School Head Teacher',
@@ -108,6 +132,7 @@ interface SandboxUser {
   email: string;
   phone: string | null;
   name: string;
+  password?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -115,14 +140,18 @@ interface SandboxUser {
 interface SandboxSchool {
   id: string;
   code: string;
+  registrationNumber: string | null;
   name: string;
   sector: SchoolSector;
   province: string;
   district: string;
+  levelSummary: string | null;
+  publicDescription: string | null;
   phone: string | null;
   email: string | null;
   timezone: string;
   isSyntheticDemo: boolean;
+  studentPortalEnabled: boolean;
   status: SchoolStatus;
 }
 
@@ -196,6 +225,52 @@ interface SandboxGuardianLink {
   relationship: string;
 }
 
+interface SandboxStudentLink {
+  id: string;
+  schoolId: string;
+  membershipId: string;
+  learnerId: string;
+  verificationMethod: StudentVerificationMethod;
+  verifiedAt: string;
+}
+
+interface SandboxEnrolmentCode {
+  id: string;
+  schoolId: string;
+  learnerId: string;
+  canonicalCode: string;
+  codeHint: string;
+  expiresAt: string;
+  usedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+interface SandboxRegistrationRequest {
+  id: string;
+  schoolId: string;
+  userId: string;
+  claimedAdmissionNo: string;
+  claimedName: string;
+  claimedClassNote: string | null;
+  status: StudentRegistrationStatus;
+  approvedLearnerId: string | null;
+  reviewedByMembershipId: string | null;
+  reviewedAt: string | null;
+  decisionNotes: string | null;
+  createdAt: string;
+}
+
+interface SandboxAnnouncement {
+  id: string;
+  schoolId: string;
+  title: string;
+  body: string;
+  audience: AnnouncementAudience;
+  postedByMembershipId: string;
+  publishedAt: string;
+}
+
 interface SandboxResultPack {
   id: string;
   schoolId: string;
@@ -238,6 +313,10 @@ interface SandboxState {
   allocations: SandboxAllocation[];
   learners: SandboxLearner[];
   guardianLinks: SandboxGuardianLink[];
+  studentLinks: SandboxStudentLink[];
+  enrolmentCodes: SandboxEnrolmentCode[];
+  registrationRequests: SandboxRegistrationRequest[];
+  announcements: SandboxAnnouncement[];
   packs: SandboxResultPack[];
   marks: SandboxMark[];
   auditEvents: AuditEventItem[];
@@ -296,33 +375,77 @@ function createInitialSandboxState(): SandboxState {
         name: 'Mr. Joseph Tembo (Synthetic)',
         createdAt: created,
         updatedAt: created
+      },
+      {
+        id: 'usr_syn_student_lubasi',
+        email: 'student.lubasi@synthetic.orqeli.invalid',
+        phone: null,
+        name: 'Lubasi Phiri',
+        createdAt: created,
+        updatedAt: created
+      },
+      {
+        id: 'usr_syn_student_pending',
+        email: 'student.pending@synthetic.orqeli.invalid',
+        phone: null,
+        name: 'Bupe Kasonde',
+        createdAt: created,
+        updatedAt: created
       }
     ],
     schools: [
       {
         id: 'sch_syn_lus_01',
         code: 'SYN-ZM-LUS-01',
+        registrationNumber: 'SYN-REG-LUS-0101',
         name: 'Lukanga Day Secondary (Synthetic Demo)',
         sector: 'GOVERNMENT',
         province: 'Lusaka',
         district: 'Chilanga',
+        levelSummary: 'Grades 8–12 Day Secondary',
+        publicDescription:
+          'Synthetic public secondary school profile for demonstrating teacher mark entry, approval workflow, and verified student portal access.',
         phone: '+260211000101',
         email: 'office@lukanga.synthetic.orqeli.invalid',
         timezone: 'Africa/Lusaka',
         isSyntheticDemo: true,
+        studentPortalEnabled: true,
         status: 'PILOT_PREP'
       },
       {
         id: 'sch_syn_eas_02',
         code: 'SYN-ZM-EAS-02',
+        registrationNumber: 'SYN-REG-EAS-0202',
         name: 'Mpezeni Trust Academy (Synthetic Demo)',
         sector: 'PRIVATE',
         province: 'Eastern',
         district: 'Chipata',
+        levelSummary: 'Grades 1–9 Primary & Junior Secondary',
+        publicDescription:
+          'Synthetic independent school profile in Eastern Province demonstrating strict tenant isolation across schools.',
         phone: '+260216000202',
         email: 'office@mpezeni.synthetic.orqeli.invalid',
         timezone: 'Africa/Lusaka',
         isSyntheticDemo: true,
+        studentPortalEnabled: true,
+        status: 'PILOT_PREP'
+      },
+      {
+        id: 'sch_syn_cb_03',
+        code: 'SYN-ZM-CB-03',
+        registrationNumber: 'SYN-REG-CB-0303',
+        name: 'Mindolo Community Day Secondary (Synthetic Demo)',
+        sector: 'COMMUNITY',
+        province: 'Copperbelt',
+        district: 'Kitwe',
+        levelSummary: 'Grades 8–9 Community Secondary',
+        publicDescription:
+          'Synthetic community school listed in the public directory prior to student portal activation.',
+        phone: '+260212000303',
+        email: 'office@mindolo.synthetic.orqeli.invalid',
+        timezone: 'Africa/Lusaka',
+        isSyntheticDemo: true,
+        studentPortalEnabled: false,
         status: 'PILOT_PREP'
       }
     ],
@@ -374,6 +497,22 @@ function createInitialSandboxState(): SandboxState {
         role: 'HEAD_TEACHER',
         status: 'ACTIVE',
         staffCode: 'SYN-EAS-001'
+      },
+      {
+        id: 'mem_syn_student_lubasi',
+        schoolId: 'sch_syn_lus_01',
+        userId: 'usr_syn_student_lubasi',
+        role: 'STUDENT',
+        status: 'ACTIVE',
+        staffCode: null
+      },
+      {
+        id: 'mem_syn_student_pending',
+        schoolId: 'sch_syn_lus_01',
+        userId: 'usr_syn_student_pending',
+        role: 'STUDENT',
+        status: 'INACTIVE',
+        staffCode: null
       }
     ],
     years: [
@@ -503,6 +642,16 @@ function createInitialSandboxState(): SandboxState {
         preferredChannel: 'PRINT_REPORT'
       },
       {
+        id: 'lrn_syn_802',
+        schoolId: 'sch_syn_lus_01',
+        admissionNumber: STATIC_DEMO_ENROLMENT_ADMISSION_NO,
+        firstName: 'Chisomo',
+        lastName: 'Banda',
+        schoolClassId: 'cls_syn_g8b',
+        guardianName: 'Mrs. Ruth Banda (Synthetic)',
+        preferredChannel: 'PRINT_REPORT'
+      },
+      {
         id: 'lrn_syn_2_701',
         schoolId: 'sch_syn_eas_02',
         admissionNumber: 'SYN-EAS-0701',
@@ -525,6 +674,65 @@ function createInitialSandboxState(): SandboxState {
         membershipId: 'mem_syn_guardian_phiri',
         learnerId: 'lrn_syn_801',
         relationship: 'Parent / Guardian'
+      }
+    ],
+    studentLinks: [
+      {
+        id: 'slk_syn_lubasi_801',
+        schoolId: 'sch_syn_lus_01',
+        membershipId: 'mem_syn_student_lubasi',
+        learnerId: 'lrn_syn_801',
+        verificationMethod: 'ENROLMENT_CODE',
+        verifiedAt: '2026-08-10T09:00:00.000Z'
+      }
+    ],
+    enrolmentCodes: [
+      {
+        id: 'ecd_syn_chisomo_802',
+        schoolId: 'sch_syn_lus_01',
+        learnerId: 'lrn_syn_802',
+        canonicalCode: 'ORQ8B022026',
+        codeHint: 'ORQ-••••-2026',
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        usedAt: null,
+        revokedAt: null,
+        createdAt: created
+      }
+    ],
+    registrationRequests: [
+      {
+        id: 'srq_syn_bupe_903',
+        schoolId: 'sch_syn_lus_01',
+        userId: 'usr_syn_student_pending',
+        claimedAdmissionNo: 'SYN-2026-0903',
+        claimedName: 'Bupe Kasonde',
+        claimedClassNote: 'Grade 9A',
+        status: 'PENDING',
+        approvedLearnerId: null,
+        reviewedByMembershipId: null,
+        reviewedAt: null,
+        decisionNotes: null,
+        createdAt: '2026-10-20T08:15:00.000Z'
+      }
+    ],
+    announcements: [
+      {
+        id: 'ann_syn_t2_published',
+        schoolId: 'sch_syn_lus_01',
+        title: 'Term 2 (2026) Official Results Published for Grade 8B',
+        body: 'Approved Term 2 academic results for Grade 8B are now available in the student portal and as printable A4 statements.',
+        audience: 'STUDENTS_AND_STAFF',
+        postedByMembershipId: 'mem_syn_head_1',
+        publishedAt: '2026-08-06T14:30:00.000Z'
+      },
+      {
+        id: 'ann_syn_staff_internal',
+        schoolId: 'sch_syn_lus_01',
+        title: 'Staff Mark-Sheet Deadline Reminder (Internal)',
+        body: 'All subject teachers must complete pending Term 3 entries before Friday 16:00 CAT.',
+        audience: 'STAFF_ONLY',
+        postedByMembershipId: 'mem_syn_head_1',
+        publishedAt: '2026-10-19T07:30:00.000Z'
       }
     ],
     packs: [
@@ -561,6 +769,22 @@ function createInitialSandboxState(): SandboxState {
         publishedByMembershipId: 'mem_syn_head_1'
       },
       {
+        id: 'pck_syn_g8b_t3',
+        schoolId: 'sch_syn_lus_01',
+        academicTermId: 'trm_syn_2026_t3',
+        schoolClassId: 'cls_syn_g8b',
+        status: 'DRAFT',
+        reviewNotes: null,
+        submittedAt: null,
+        submittedByMembershipId: null,
+        reviewedAt: null,
+        reviewedByMembershipId: null,
+        approvedAt: null,
+        approvedByMembershipId: null,
+        publishedAt: null,
+        publishedByMembershipId: null
+      },
+      {
         id: 'pck_syn_g7a_t3_2',
         schoolId: 'sch_syn_eas_02',
         academicTermId: 'trm_syn_2026_t3_2',
@@ -591,7 +815,11 @@ function createInitialSandboxState(): SandboxState {
       { schoolId: 'sch_syn_lus_01', packId: 'pck_syn_g9a_t3', learnerId: 'lrn_syn_903', subjectId: 'sub_syn_soc', status: 'PRESENT', score: 83, teacherComment: 'Insightful historical analysis.', enteredByMembershipId: 'mem_syn_mwamba', enteredAt: created },
       { schoolId: 'sch_syn_lus_01', packId: 'pck_syn_g8b_t2', learnerId: 'lrn_syn_801', subjectId: 'sub_syn_math', status: 'PRESENT', score: 81, teacherComment: 'Confident numerical work.', enteredByMembershipId: 'mem_syn_banda', enteredAt: '2026-08-03T09:00:00.000Z' },
       { schoolId: 'sch_syn_lus_01', packId: 'pck_syn_g8b_t2', learnerId: 'lrn_syn_801', subjectId: 'sub_syn_eng', status: 'PRESENT', score: 76, teacherComment: 'Attentive reading and grammar.', enteredByMembershipId: 'mem_syn_mwamba', enteredAt: '2026-08-03T11:00:00.000Z' },
-      { schoolId: 'sch_syn_lus_01', packId: 'pck_syn_g8b_t2', learnerId: 'lrn_syn_801', subjectId: 'sub_syn_sci', status: 'PRESENT', score: 84, teacherComment: 'Strong curiosity in experiments.', enteredByMembershipId: 'mem_syn_banda', enteredAt: '2026-08-03T12:00:00.000Z' }
+      { schoolId: 'sch_syn_lus_01', packId: 'pck_syn_g8b_t2', learnerId: 'lrn_syn_801', subjectId: 'sub_syn_sci', status: 'PRESENT', score: 84, teacherComment: 'Strong curiosity in experiments.', enteredByMembershipId: 'mem_syn_banda', enteredAt: '2026-08-03T12:00:00.000Z' },
+      { schoolId: 'sch_syn_lus_01', packId: 'pck_syn_g8b_t2', learnerId: 'lrn_syn_802', subjectId: 'sub_syn_math', status: 'PRESENT', score: 72, teacherComment: 'Good accuracy in linear equations.', enteredByMembershipId: 'mem_syn_banda', enteredAt: '2026-08-03T09:00:00.000Z' },
+      { schoolId: 'sch_syn_lus_01', packId: 'pck_syn_g8b_t2', learnerId: 'lrn_syn_802', subjectId: 'sub_syn_eng', status: 'PRESENT', score: 79, teacherComment: 'Expressive composition writing.', enteredByMembershipId: 'mem_syn_mwamba', enteredAt: '2026-08-03T11:00:00.000Z' },
+      { schoolId: 'sch_syn_lus_01', packId: 'pck_syn_g8b_t2', learnerId: 'lrn_syn_802', subjectId: 'sub_syn_sci', status: 'PRESENT', score: 68, teacherComment: 'Solid understanding of plant biology.', enteredByMembershipId: 'mem_syn_banda', enteredAt: '2026-08-03T12:00:00.000Z' },
+      { schoolId: 'sch_syn_lus_01', packId: 'pck_syn_g8b_t3', learnerId: 'lrn_syn_801', subjectId: 'sub_syn_math', status: 'PRESENT', score: 91, teacherComment: 'Draft Term 3 score — hidden until published.', enteredByMembershipId: 'mem_syn_banda', enteredAt: created }
     ],
     auditEvents: [
       {
@@ -685,7 +913,7 @@ function toUserProfile(user: SandboxUser): AuthenticatedUserProfile {
 
 function getUserMemberships(state: SandboxState, userId: string): MembershipSummary[] {
   return state.memberships
-    .filter((m) => m.userId === userId && m.status === 'ACTIVE')
+    .filter((m) => m.userId === userId && (m.status === 'ACTIVE' || m.role === 'STUDENT'))
     .map((m) => {
       const school = state.schools.find((s) => s.id === m.schoolId)!;
       return {
@@ -697,6 +925,44 @@ function getUserMemberships(state: SandboxState, userId: string): MembershipSumm
         school: toSchoolSummary(school)
       };
     });
+}
+
+function computeStaticSubjectGrade(
+  status: Exclude<MarkEntryStatus, 'PENDING'>,
+  score: number | null,
+  maxMark: number
+): { percentage: number | null; grade: string } {
+  if (status === 'ABSENT') return { percentage: null, grade: 'ABS' };
+  if (status === 'EXEMPT') return { percentage: null, grade: 'EX' };
+  if (score === null || maxMark <= 0) return { percentage: null, grade: '—' };
+  const percentage = Math.round((score / maxMark) * 1000) / 10;
+  if (percentage >= 75) return { percentage, grade: 'Distinction (1)' };
+  if (percentage >= 65) return { percentage, grade: 'Merit (2)' };
+  if (percentage >= 50) return { percentage, grade: 'Credit (3)' };
+  if (percentage >= 40) return { percentage, grade: 'Pass (4)' };
+  return { percentage, grade: 'Unsatisfactory (9)' };
+}
+
+function toPublicSchoolProfile(state: SandboxState, s: SandboxSchool): PublicSchoolProfile {
+  const yr = state.years.find((y) => y.schoolId === s.id && y.isCurrent);
+  return {
+    id: s.id,
+    code: s.code,
+    registrationNumber: s.registrationNumber,
+    name: s.name,
+    sector: s.sector,
+    province: s.province,
+    district: s.district,
+    levelSummary: s.levelSummary,
+    publicDescription: s.publicDescription,
+    phone: s.phone,
+    email: s.email,
+    status: s.status,
+    isSyntheticDemo: s.isSyntheticDemo,
+    studentPortalEnabled: s.studentPortalEnabled,
+    canSelfRegister: s.status !== 'SUSPENDED' && s.studentPortalEnabled,
+    currentAcademicYearLabel: yr?.label ?? null
+  };
 }
 
 function resolveMembershipUserName(state: SandboxState, membershipId: string | null): string | null {
@@ -948,6 +1214,7 @@ function buildReportCard(
       status: cell.status,
       score: cell.score,
       maxMark: sub.maxMark,
+      ...computeStaticSubjectGrade(cell.status, cell.score, sub.maxMark),
       teacherComment: cell.teacherComment,
       teacherName: resolveMembershipUserName(state, alc.teacherMembershipId) ?? 'Assigned Teacher'
     });
@@ -1023,13 +1290,226 @@ export async function handleStaticSandboxRequest(
     const payload: SandboxPersonasResponse = {
       syntheticOnly: true,
       credentialHint: STATIC_SANDBOX_CREDENTIAL,
+      demoEnrolmentWalkthrough: {
+        schoolCode: 'SYN-ZM-LUS-01',
+        admissionNumber: STATIC_DEMO_ENROLMENT_ADMISSION_NO,
+        enrolmentCode: STATIC_DEMO_ENROLMENT_CODE
+      },
       personas: STATIC_SANDBOX_PERSONAS
     };
     return jsonResponse(200, payload);
   }
 
+  if (method === 'GET' && path === '/api/public/schools') {
+    const q = (parsedUrl.searchParams.get('q') ?? '').trim().toLowerCase();
+    const prov = (parsedUrl.searchParams.get('province') ?? '').trim().toLowerCase();
+    const sector = (parsedUrl.searchParams.get('sector') ?? '').trim();
+    const portalOnly = parsedUrl.searchParams.get('portalOnly') === 'true';
+
+    const schools = state.schools
+      .filter((s) => {
+        if (s.status === 'SUSPENDED') return false;
+        if (prov && s.province.toLowerCase() !== prov) return false;
+        if (sector && s.sector !== sector) return false;
+        if (portalOnly && !s.studentPortalEnabled) return false;
+        if (q) {
+          const hay = [
+            s.name,
+            s.code,
+            s.registrationNumber ?? '',
+            s.province,
+            s.district,
+            s.levelSummary ?? ''
+          ]
+            .join(' ')
+            .toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      })
+      .map((s) => toPublicSchoolProfile(state, s));
+
+    return jsonResponse(200, { schools });
+  }
+
+  const publicProfileMatch = path.match(/^\/api\/public\/schools\/([^/]+)$/);
+  if (method === 'GET' && publicProfileMatch) {
+    const needle = decodeURIComponent(publicProfileMatch[1]!).trim().toLowerCase();
+    const school = state.schools.find(
+      (s) =>
+        s.status !== 'SUSPENDED' &&
+        (s.code.toLowerCase() === needle || s.id.toLowerCase() === needle)
+    );
+    if (!school) {
+      return errorResponse(404, 'SCHOOL_NOT_FOUND', 'Public school profile was not found.');
+    }
+    return jsonResponse(200, { school: toPublicSchoolProfile(state, school) });
+  }
+
   if (method === 'GET' && path === '/api/auth/csrf') {
     return jsonResponse(200, { csrfToken: STATIC_CSRF_TOKEN });
+  }
+
+  if (method === 'POST' && path === '/api/student/register') {
+    const body = parseJsonBody(init);
+    const schoolId = String(body.schoolId ?? '').trim();
+    const fullName = String(body.fullName ?? '').trim();
+    const admissionNumber = String(body.admissionNumber ?? '').trim().toUpperCase();
+    const email = String(body.email ?? '').trim().toLowerCase();
+    const password = String(body.password ?? '');
+    const verificationMode = String(
+      body.verificationMode ?? ''
+    ) as StudentVerificationMethod;
+    const rawCode =
+      typeof body.enrolmentCode === 'string'
+        ? body.enrolmentCode.toUpperCase().replace(/[\s-]+/g, '')
+        : '';
+    const classHint =
+      typeof body.classHint === 'string' && body.classHint.trim()
+        ? body.classHint.trim()
+        : null;
+
+    if (!schoolId || fullName.length < 2 || admissionNumber.length < 2 || password.length < 8) {
+      return errorResponse(400, 'VALIDATION_ERROR', 'Please complete all required fields.');
+    }
+
+    const school = state.schools.find((s) => s.id === schoolId);
+    if (!school || school.status === 'SUSPENDED' || !school.studentPortalEnabled) {
+      return errorResponse(
+        403,
+        'STUDENT_PORTAL_NOT_ENABLED',
+        'Student portal self-registration is not enabled for this school.'
+      );
+    }
+
+    if (state.users.some((u) => u.email.toLowerCase() === email)) {
+      return errorResponse(
+        409,
+        'ACCOUNT_EMAIL_CONFLICT',
+        'Unable to create a student account with this email address.'
+      );
+    }
+
+    const now = new Date().toISOString();
+    if (verificationMode === 'ENROLMENT_CODE') {
+      const codeRecord = state.enrolmentCodes.find(
+        (c) => c.schoolId === school.id && c.canonicalCode === rawCode
+      );
+      const learner = codeRecord
+        ? state.learners.find((l) => l.id === codeRecord.learnerId)
+        : undefined;
+      const alreadyLinked = learner
+        ? state.studentLinks.some((sl) => sl.learnerId === learner.id)
+        : false;
+
+      if (
+        !codeRecord ||
+        !learner ||
+        learner.admissionNumber.toUpperCase() !== admissionNumber ||
+        codeRecord.usedAt !== null ||
+        codeRecord.revokedAt !== null ||
+        new Date(codeRecord.expiresAt).getTime() <= Date.now() ||
+        alreadyLinked
+      ) {
+        return errorResponse(
+          400,
+          'INVALID_ENROLMENT_VERIFICATION',
+          'Enrolment verification failed. Confirm your school, learner admission number, and active single-use enrolment code.'
+        );
+      }
+
+      const newUser: SandboxUser = {
+        id: `usr_syn_stu_${state.nextEventCounter++}`,
+        email,
+        phone: null,
+        name: fullName,
+        password,
+        createdAt: now,
+        updatedAt: now
+      };
+      state.users.push(newUser);
+      codeRecord.usedAt = now;
+
+      const memId = `mem_syn_stu_${state.nextEventCounter++}`;
+      state.memberships.push({
+        id: memId,
+        schoolId: school.id,
+        userId: newUser.id,
+        role: 'STUDENT',
+        status: 'ACTIVE',
+        staffCode: null
+      });
+      state.studentLinks.push({
+        id: `slk_syn_${state.nextEventCounter++}`,
+        schoolId: school.id,
+        membershipId: memId,
+        learnerId: learner.id,
+        verificationMethod: 'ENROLMENT_CODE',
+        verifiedAt: now
+      });
+      state.currentUserId = newUser.id;
+      saveState(state);
+
+      return jsonResponse(201, {
+        outcome: 'VERIFIED',
+        schoolCode: school.code,
+        requestId: null,
+        message: 'Student account verified and linked to your school academic record.',
+        user: toUserProfile(newUser),
+        memberships: getUserMemberships(state, newUser.id),
+        csrfToken: STATIC_CSRF_TOKEN
+      });
+    }
+
+    const newUser: SandboxUser = {
+      id: `usr_syn_stu_${state.nextEventCounter++}`,
+      email,
+      phone: null,
+      name: fullName,
+      password,
+      createdAt: now,
+      updatedAt: now
+    };
+    state.users.push(newUser);
+
+    const memId = `mem_syn_stu_${state.nextEventCounter++}`;
+    state.memberships.push({
+      id: memId,
+      schoolId: school.id,
+      userId: newUser.id,
+      role: 'STUDENT',
+      status: 'INACTIVE',
+      staffCode: null
+    });
+
+    const reqId = `srq_syn_${state.nextEventCounter++}`;
+    state.registrationRequests.unshift({
+      id: reqId,
+      schoolId: school.id,
+      userId: newUser.id,
+      claimedAdmissionNo: admissionNumber,
+      claimedName: fullName,
+      claimedClassNote: classHint,
+      status: 'PENDING',
+      approvedLearnerId: null,
+      reviewedByMembershipId: null,
+      reviewedAt: null,
+      decisionNotes: null,
+      createdAt: now
+    });
+    state.currentUserId = newUser.id;
+    saveState(state);
+
+    return jsonResponse(201, {
+      outcome: 'PENDING_APPROVAL',
+      schoolCode: school.code,
+      requestId: reqId,
+      message:
+        'Registration request submitted. School administration must verify your learner record before academic results become visible.',
+      user: toUserProfile(newUser),
+      memberships: getUserMemberships(state, newUser.id),
+      csrfToken: STATIC_CSRF_TOKEN
+    });
   }
 
   if (method === 'POST' && path === '/api/auth/login') {
@@ -1037,7 +1517,8 @@ export async function handleStaticSandboxRequest(
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const password = typeof body.password === 'string' ? body.password : '';
     const user = state.users.find((u) => u.email.toLowerCase() === email);
-    if (!user || password !== STATIC_SANDBOX_CREDENTIAL) {
+    const expectedPass = user?.password ?? STATIC_SANDBOX_CREDENTIAL;
+    if (!user || password !== expectedPass) {
       return errorResponse(401, 'INVALID_CREDENTIALS', 'Invalid email or password.');
     }
     state.currentUserId = user.id;
@@ -1072,6 +1553,200 @@ export async function handleStaticSandboxRequest(
 
   if (!currentUser) {
     return errorResponse(401, 'UNAUTHENTICATED', 'Authentication is required.');
+  }
+
+  if (method === 'GET' && path === '/api/student/portal') {
+    const studentMemberships = state.memberships.filter(
+      (m) => m.userId === currentUser.id && m.role === 'STUDENT'
+    );
+
+    const accounts: StudentPortalAccount[] = studentMemberships.map((mem) => {
+      const school = state.schools.find((s) => s.id === mem.schoolId)!;
+      const link = state.studentLinks.find(
+        (sl) => sl.schoolId === school.id && sl.membershipId === mem.id
+      );
+      const reqRecord = state.registrationRequests.find(
+        (r) => r.schoolId === school.id && r.userId === currentUser.id
+      );
+      const schoolDto = {
+        ...toSchoolSummary(school),
+        registrationNumber: school.registrationNumber,
+        levelSummary: school.levelSummary,
+        phone: school.phone,
+        email: school.email
+      };
+
+      const announcements: SchoolAnnouncementItem[] = state.announcements
+        .filter((a) => a.schoolId === school.id && a.audience === 'STUDENTS_AND_STAFF')
+        .map((a) => ({
+          id: a.id,
+          schoolId: school.id,
+          title: a.title,
+          body: a.body,
+          audience: a.audience,
+          postedByName:
+            resolveMembershipUserName(state, a.postedByMembershipId) ??
+            'School Administration',
+          publishedAt: a.publishedAt
+        }));
+
+      if (!link || mem.status !== 'ACTIVE') {
+        const verificationState: 'PENDING_APPROVAL' | 'REJECTED' =
+          reqRecord?.status === 'REJECTED' ? 'REJECTED' : 'PENDING_APPROVAL';
+        return {
+          membershipId: mem.id,
+          school: schoolDto,
+          verificationState,
+          learner: null,
+          pendingRequest: reqRecord
+            ? {
+                id: reqRecord.id,
+                claimedAdmissionNo: reqRecord.claimedAdmissionNo,
+                claimedClassNote: reqRecord.claimedClassNote,
+                status: reqRecord.status,
+                decisionNotes: reqRecord.decisionNotes,
+                createdAt: reqRecord.createdAt,
+                reviewedAt: reqRecord.reviewedAt
+              }
+            : null,
+          termResults: [],
+          announcements: []
+        };
+      }
+
+      const learner = state.learners.find((l) => l.id === link.learnerId)!;
+      const cls = state.classes.find((c) => c.id === learner.schoolClassId) ?? null;
+      const currentYr =
+        state.years.find((y) => y.schoolId === school.id && y.isCurrent) ?? null;
+      const currentTrm =
+        state.terms.find((t) => t.schoolId === school.id && t.isCurrent) ?? null;
+
+      const classPacks = learner.schoolClassId
+        ? state.packs.filter(
+            (p) => p.schoolId === school.id && p.schoolClassId === learner.schoolClassId
+          )
+        : [];
+
+      const termResults: StudentTermResultStatus[] = classPacks.map((p) => {
+        const term = state.terms.find((t) => t.id === p.academicTermId)!;
+        const year = state.years.find((y) => y.id === term.academicYearId)!;
+        const pCls = state.classes.find((c) => c.id === p.schoolClassId)!;
+
+        if (p.status === 'PUBLISHED') {
+          const rc = buildReportCard(state, school, p, learner);
+          if (rc) {
+            return {
+              packId: p.id,
+              academicYearLabel: year.label,
+              academicTermLabel: term.label,
+              termNumber: term.termNumber,
+              className: pCls.name,
+              gradeLevel: pCls.gradeLevel,
+              publicationState: 'PUBLISHED',
+              statusMessage:
+                'Approved by school administration and officially published.',
+              publishedAt: p.publishedAt,
+              reportCard: rc
+            };
+          }
+        }
+
+        const statusMessage =
+          p.status === 'APPROVED' || p.status === 'SUBMITTED'
+            ? 'Term results are undergoing school review and have not yet been published.'
+            : 'Term assessments are still in preparation. Marks remain hidden until officially published.';
+
+        return {
+          packId: p.id,
+          academicYearLabel: year.label,
+          academicTermLabel: term.label,
+          termNumber: term.termNumber,
+          className: pCls.name,
+          gradeLevel: pCls.gradeLevel,
+          publicationState: 'UNPUBLISHED',
+          statusMessage,
+          publishedAt: null,
+          reportCard: null
+        };
+      });
+
+      return {
+        membershipId: mem.id,
+        school: schoolDto,
+        verificationState: 'VERIFIED',
+        learner: {
+          id: learner.id,
+          admissionNumber: learner.admissionNumber,
+          firstName: learner.firstName,
+          lastName: learner.lastName,
+          currentClassName: cls?.name ?? null,
+          gradeLevel: cls?.gradeLevel ?? null,
+          currentAcademicYearLabel: currentYr?.label ?? null,
+          currentTermLabel: currentTrm?.label ?? null,
+          verificationMethod: link.verificationMethod,
+          verifiedAt: link.verifiedAt
+        },
+        pendingRequest: null,
+        termResults,
+        announcements
+      };
+    });
+
+    const payload: StudentPortalOverview = {
+      studentUser: {
+        id: currentUser.id,
+        name: currentUser.name,
+        email: currentUser.email
+      },
+      accounts
+    };
+    return jsonResponse(200, payload);
+  }
+
+  const studentReportMatch = path.match(
+    /^\/api\/student\/schools\/([^/]+)\/learners\/([^/]+)\/report-cards\/([^/]+)$/
+  );
+  if (method === 'GET' && studentReportMatch) {
+    const sId = decodeURIComponent(studentReportMatch[1]!);
+    const lId = decodeURIComponent(studentReportMatch[2]!);
+    const pId = decodeURIComponent(studentReportMatch[3]!);
+
+    const isLinked = state.studentLinks.some((sl) => {
+      if (sl.schoolId !== sId || sl.learnerId !== lId) return false;
+      const mem = state.memberships.find((m) => m.id === sl.membershipId);
+      return (
+        mem &&
+        mem.userId === currentUser.id &&
+        mem.role === 'STUDENT' &&
+        mem.status === 'ACTIVE'
+      );
+    });
+    if (!isLinked) {
+      return errorResponse(
+        403,
+        'STUDENT_LEARNER_ACCESS_DENIED',
+        'Student portal access is strictly restricted to your own verified learner record.'
+      );
+    }
+
+    const school = state.schools.find((s) => s.id === sId);
+    const pack = state.packs.find((p) => p.schoolId === sId && p.id === pId);
+    const learner = state.learners.find((l) => l.schoolId === sId && l.id === lId);
+    if (!school || !pack || !learner || pack.schoolClassId !== learner.schoolClassId) {
+      return errorResponse(404, 'NOT_FOUND', 'Published report card was not found.');
+    }
+    if (pack.status !== 'PUBLISHED') {
+      return errorResponse(
+        403,
+        'REPORT_CARD_NOT_PUBLISHED',
+        'Students can only access report cards after official publication.'
+      );
+    }
+    const reportCard = buildReportCard(state, school, pack, learner);
+    if (!reportCard) {
+      return errorResponse(404, 'NOT_FOUND', 'Published report card was not found.');
+    }
+    return jsonResponse(200, { reportCard });
   }
 
   const schoolRouteMatch = path.match(/^\/api\/schools\/([^/]+)\/(.+)$/);
@@ -1221,6 +1896,396 @@ export async function handleStaticSandboxRequest(
     }
     const events = state.auditEvents.filter((e) => e.schoolId === schoolId);
     return jsonResponse(200, { events });
+  }
+
+  if (subPath.startsWith('admin/')) {
+    if (!LEADERSHIP_ROLES.includes(membership.role)) {
+      return errorResponse(403, 'INSUFFICIENT_SCHOOL_ROLE', 'Leadership role required.');
+    }
+
+    const toAdminRequestDto = (r: SandboxRegistrationRequest): AdminRegistrationRequest => {
+      const usr = state.users.find((u) => u.id === r.userId);
+      const matched = state.learners.find(
+        (l) =>
+          l.schoolId === schoolId &&
+          l.admissionNumber.toUpperCase() === r.claimedAdmissionNo.toUpperCase()
+      );
+      const matchedCls = matched
+        ? state.classes.find((c) => c.id === matched.schoolClassId) ?? null
+        : null;
+      return {
+        id: r.id,
+        userId: r.userId,
+        applicantEmail: usr?.email ?? null,
+        claimedAdmissionNo: r.claimedAdmissionNo,
+        claimedName: r.claimedName,
+        claimedClassNote: r.claimedClassNote,
+        status: r.status,
+        approvedLearnerId: r.approvedLearnerId,
+        reviewedByName: resolveMembershipUserName(state, r.reviewedByMembershipId),
+        reviewedAt: r.reviewedAt,
+        decisionNotes: r.decisionNotes,
+        createdAt: r.createdAt,
+        suggestedLearner: matched
+          ? {
+              id: matched.id,
+              admissionNumber: matched.admissionNumber,
+              firstName: matched.firstName,
+              lastName: matched.lastName,
+              currentClassName: matchedCls?.name ?? null,
+              alreadyLinked: state.studentLinks.some((sl) => sl.learnerId === matched.id)
+            }
+          : null
+      };
+    };
+
+    if (method === 'GET' && subPath === 'admin/student-portal') {
+      const classes = state.classes
+        .filter((c) => c.schoolId === schoolId)
+        .map((c) => {
+          const yr = state.years.find((y) => y.id === c.academicYearId);
+          return {
+            id: c.id,
+            name: c.name,
+            gradeLevel: c.gradeLevel,
+            academicYearLabel: yr?.label ?? '2026 Academic Year'
+          };
+        });
+
+      const learners: AdminRosterLearner[] = state.learners
+        .filter((l) => l.schoolId === schoolId)
+        .sort((a, b) => a.admissionNumber.localeCompare(b.admissionNumber))
+        .map((l) => {
+          const cls = state.classes.find((c) => c.id === l.schoolClassId) ?? null;
+          const link = state.studentLinks.find(
+            (sl) => sl.schoolId === schoolId && sl.learnerId === l.id
+          );
+          const linkedMem = link
+            ? state.memberships.find((m) => m.id === link.membershipId)
+            : null;
+          const linkedUser = linkedMem
+            ? state.users.find((u) => u.id === linkedMem.userId)
+            : null;
+          const activeCode = state.enrolmentCodes.find(
+            (c) =>
+              c.schoolId === schoolId &&
+              c.learnerId === l.id &&
+              c.usedAt === null &&
+              c.revokedAt === null &&
+              new Date(c.expiresAt).getTime() > Date.now()
+          );
+
+          return {
+            id: l.id,
+            admissionNumber: l.admissionNumber,
+            firstName: l.firstName,
+            lastName: l.lastName,
+            schoolClassId: cls?.id ?? null,
+            currentClassName: cls?.name ?? null,
+            gradeLevel: cls?.gradeLevel ?? null,
+            preferredChannel: l.preferredChannel,
+            active: true,
+            linkedStudent:
+              link && linkedUser
+                ? {
+                    userId: linkedUser.id,
+                    name: linkedUser.name,
+                    email: linkedUser.email,
+                    verificationMethod: link.verificationMethod,
+                    verifiedAt: link.verifiedAt
+                  }
+                : null,
+            activeEnrolmentCode: activeCode
+              ? {
+                  id: activeCode.id,
+                  codeHint: activeCode.codeHint,
+                  expiresAt: activeCode.expiresAt,
+                  createdAt: activeCode.createdAt
+                }
+              : null
+          };
+        });
+
+      const registrationRequests: AdminRegistrationRequest[] = state.registrationRequests
+        .filter((r) => r.schoolId === schoolId)
+        .map(toAdminRequestDto);
+
+      const announcements: SchoolAnnouncementItem[] = state.announcements
+        .filter((a) => a.schoolId === schoolId)
+        .map((a) => ({
+          id: a.id,
+          schoolId,
+          title: a.title,
+          body: a.body,
+          audience: a.audience,
+          postedByName:
+            resolveMembershipUserName(state, a.postedByMembershipId) ??
+            'School Administration',
+          publishedAt: a.publishedAt
+        }));
+
+      const adminState: SchoolAdminPortalState = {
+        school: {
+          ...toSchoolSummary(school),
+          registrationNumber: school.registrationNumber,
+          levelSummary: school.levelSummary,
+          studentPortalEnabled: school.studentPortalEnabled
+        },
+        classes,
+        learners,
+        registrationRequests,
+        announcements
+      };
+      return jsonResponse(200, adminState);
+    }
+
+    if (method === 'POST' && subPath === 'admin/learners') {
+      const body = parseJsonBody(init);
+      const admissionNumber = String(body.admissionNumber ?? '').trim().toUpperCase();
+      const firstName = String(body.firstName ?? '').trim();
+      const lastName = String(body.lastName ?? '').trim();
+      const schoolClassId =
+        typeof body.schoolClassId === 'string' && body.schoolClassId
+          ? body.schoolClassId
+          : '';
+      if (!admissionNumber || !firstName || !lastName) {
+        return errorResponse(400, 'VALIDATION_ERROR', 'Learner fields are required.');
+      }
+      if (
+        state.learners.some(
+          (l) =>
+            l.schoolId === schoolId &&
+            l.admissionNumber.toUpperCase() === admissionNumber
+        )
+      ) {
+        return errorResponse(
+          409,
+          'DUPLICATE_ADMISSION_NUMBER',
+          'A learner with this admission number already exists.'
+        );
+      }
+      const cls = schoolClassId
+        ? state.classes.find((c) => c.schoolId === schoolId && c.id === schoolClassId)
+        : null;
+      const newLearner: SandboxLearner = {
+        id: `lrn_syn_${state.nextEventCounter++}`,
+        schoolId,
+        admissionNumber,
+        firstName,
+        lastName,
+        schoolClassId: cls?.id ?? '',
+        guardianName: typeof body.guardianName === 'string' ? body.guardianName : '',
+        preferredChannel: 'PRINT_REPORT'
+      };
+      state.learners.push(newLearner);
+      appendAudit(state, {
+        schoolId,
+        action: 'LEARNER_CREATED',
+        entityType: 'Learner',
+        entityId: newLearner.id,
+        actorName: currentUser.name,
+        actorRole: membership.role,
+        afterState: { admissionNumber, firstName, lastName }
+      });
+      saveState(state);
+      const createdDto: AdminRosterLearner = {
+        id: newLearner.id,
+        admissionNumber: newLearner.admissionNumber,
+        firstName: newLearner.firstName,
+        lastName: newLearner.lastName,
+        schoolClassId: cls?.id ?? null,
+        currentClassName: cls?.name ?? null,
+        gradeLevel: cls?.gradeLevel ?? null,
+        preferredChannel: newLearner.preferredChannel,
+        active: true,
+        linkedStudent: null,
+        activeEnrolmentCode: null
+      };
+      return jsonResponse(201, { learner: createdDto });
+    }
+
+    const genCodeMatch = subPath.match(/^admin\/learners\/([^/]+)\/enrolment-codes$/);
+    if (method === 'POST' && genCodeMatch) {
+      const learnerId = decodeURIComponent(genCodeMatch[1]!);
+      const learner = state.learners.find(
+        (l) => l.schoolId === schoolId && l.id === learnerId
+      );
+      if (!learner) {
+        return errorResponse(404, 'LEARNER_NOT_FOUND', 'Learner not found in this school.');
+      }
+      if (state.studentLinks.some((sl) => sl.learnerId === learner.id)) {
+        return errorResponse(
+          409,
+          'LEARNER_ALREADY_LINKED',
+          'This learner is already linked to a verified student account.'
+        );
+      }
+      const now = new Date().toISOString();
+      for (const c of state.enrolmentCodes) {
+        if (c.schoolId === schoolId && c.learnerId === learnerId && !c.usedAt && !c.revokedAt) {
+          c.revokedAt = now;
+        }
+      }
+      const suffix = String(1000 + state.nextEventCounter++).slice(-4);
+      const plainCode = `ORQ-ST${suffix.slice(0, 2)}-${suffix}`;
+      const codeHint = `ORQ-••••-${suffix}`;
+      const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+      const id = `ecd_syn_${state.nextEventCounter++}`;
+      state.enrolmentCodes.unshift({
+        id,
+        schoolId,
+        learnerId,
+        canonicalCode: plainCode.replace(/-/g, ''),
+        codeHint,
+        expiresAt,
+        usedAt: null,
+        revokedAt: null,
+        createdAt: now
+      });
+      saveState(state);
+      const enrolmentCode: IssuedEnrolmentCode = {
+        id,
+        learnerId: learner.id,
+        admissionNumber: learner.admissionNumber,
+        learnerName: `${learner.firstName} ${learner.lastName}`,
+        plainCode,
+        codeHint,
+        expiresAt
+      };
+      return jsonResponse(201, { enrolmentCode });
+    }
+
+    const revokeCodeMatch = subPath.match(/^admin\/enrolment-codes\/([^/]+)\/revoke$/);
+    if (method === 'POST' && revokeCodeMatch) {
+      const codeId = decodeURIComponent(revokeCodeMatch[1]!);
+      const rec = state.enrolmentCodes.find(
+        (c) => c.schoolId === schoolId && c.id === codeId
+      );
+      if (!rec) {
+        return errorResponse(404, 'CODE_NOT_FOUND', 'Enrolment code not found.');
+      }
+      rec.revokedAt = new Date().toISOString();
+      saveState(state);
+      return jsonResponse(200, { status: 'revoked' });
+    }
+
+    const approveReqMatch = subPath.match(/^admin\/student-requests\/([^/]+)\/approve$/);
+    if (method === 'POST' && approveReqMatch) {
+      const requestId = decodeURIComponent(approveReqMatch[1]!);
+      const body = parseJsonBody(init);
+      const learnerId = String(body.learnerId ?? '');
+      const reqRecord = state.registrationRequests.find(
+        (r) => r.schoolId === schoolId && r.id === requestId
+      );
+      if (!reqRecord || reqRecord.status !== 'PENDING') {
+        return errorResponse(404, 'REQUEST_NOT_PENDING', 'Pending request not found.');
+      }
+      if (reqRecord.userId === currentUser.id) {
+        return errorResponse(403, 'SELF_APPROVAL_FORBIDDEN', 'Cannot approve own request.');
+      }
+      const learner = state.learners.find(
+        (l) => l.schoolId === schoolId && l.id === learnerId
+      );
+      if (!learner) {
+        return errorResponse(404, 'LEARNER_NOT_FOUND', 'Learner not found in this school.');
+      }
+      if (state.studentLinks.some((sl) => sl.learnerId === learner.id)) {
+        return errorResponse(409, 'LEARNER_ALREADY_LINKED', 'Learner already linked.');
+      }
+
+      const now = new Date().toISOString();
+      let stuMem = state.memberships.find(
+        (m) =>
+          m.schoolId === schoolId &&
+          m.userId === reqRecord.userId &&
+          m.role === 'STUDENT'
+      );
+      if (!stuMem) {
+        stuMem = {
+          id: `mem_syn_stu_${state.nextEventCounter++}`,
+          schoolId,
+          userId: reqRecord.userId,
+          role: 'STUDENT',
+          status: 'ACTIVE',
+          staffCode: null
+        };
+        state.memberships.push(stuMem);
+      } else {
+        stuMem.status = 'ACTIVE';
+      }
+
+      state.studentLinks.push({
+        id: `slk_syn_${state.nextEventCounter++}`,
+        schoolId,
+        membershipId: stuMem.id,
+        learnerId: learner.id,
+        verificationMethod: 'STAFF_APPROVAL',
+        verifiedAt: now
+      });
+
+      reqRecord.status = 'APPROVED';
+      reqRecord.approvedLearnerId = learner.id;
+      reqRecord.reviewedByMembershipId = membership.id;
+      reqRecord.reviewedAt = now;
+      reqRecord.decisionNotes =
+        typeof body.decisionNotes === 'string' ? body.decisionNotes : null;
+      saveState(state);
+
+      return jsonResponse(200, { request: toAdminRequestDto(reqRecord) });
+    }
+
+    const rejectReqMatch = subPath.match(/^admin\/student-requests\/([^/]+)\/reject$/);
+    if (method === 'POST' && rejectReqMatch) {
+      const requestId = decodeURIComponent(rejectReqMatch[1]!);
+      const body = parseJsonBody(init);
+      const reqRecord = state.registrationRequests.find(
+        (r) => r.schoolId === schoolId && r.id === requestId
+      );
+      if (!reqRecord || reqRecord.status !== 'PENDING') {
+        return errorResponse(404, 'REQUEST_NOT_PENDING', 'Pending request not found.');
+      }
+      reqRecord.status = 'REJECTED';
+      reqRecord.reviewedByMembershipId = membership.id;
+      reqRecord.reviewedAt = new Date().toISOString();
+      reqRecord.decisionNotes = String(body.decisionNotes ?? 'Rejected');
+      saveState(state);
+
+      return jsonResponse(200, { request: toAdminRequestDto(reqRecord) });
+    }
+
+    if (method === 'POST' && subPath === 'admin/announcements') {
+      const body = parseJsonBody(init);
+      const title = String(body.title ?? '').trim();
+      const noticeBody = String(body.body ?? '').trim();
+      const audience = (body.audience === 'STAFF_ONLY'
+        ? 'STAFF_ONLY'
+        : 'STUDENTS_AND_STAFF') as AnnouncementAudience;
+      if (title.length < 3 || noticeBody.length < 5) {
+        return errorResponse(400, 'VALIDATION_ERROR', 'Notice title and message are required.');
+      }
+      const publishedAt = new Date().toISOString();
+      const id = `ann_syn_${state.nextEventCounter++}`;
+      state.announcements.unshift({
+        id,
+        schoolId,
+        title,
+        body: noticeBody,
+        audience,
+        postedByMembershipId: membership.id,
+        publishedAt
+      });
+      saveState(state);
+      const createdNotice: SchoolAnnouncementItem = {
+        id,
+        schoolId,
+        title,
+        body: noticeBody,
+        audience,
+        postedByName: currentUser.name,
+        publishedAt
+      };
+      return jsonResponse(201, { announcement: createdNotice });
+    }
   }
 
   const reportMatch = subPath.match(/^result-packs\/([^/]+)\/report-cards\/([^/]+)$/);

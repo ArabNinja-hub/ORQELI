@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   AlertTriangle,
@@ -32,6 +32,7 @@ import {
   formatSchoolSector,
   validateDraftMarkInput
 } from './workflowRules';
+import { SchoolAdminPortalPanel } from './SchoolAdminPortalPanel';
 
 const STAFF_ROLE_SET = new Set([
   'SCHOOL_ADMIN',
@@ -56,10 +57,21 @@ export function WorkspacePage() {
   const { memberships } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
+  // If the signed-in user holds a student membership (including pending INACTIVE)
+  // and no staff/guardian memberships, route directly to the Student Portal.
+  const isStudentOnly = useMemo(() => {
+    const hasStudent = memberships.some((m) => m.role === 'STUDENT');
+    const hasNonStudent = memberships.some((m) => m.role !== 'STUDENT');
+    return hasStudent && !hasNonStudent;
+  }, [memberships]);
+
   const activeMemberships = useMemo(
     () =>
       memberships.filter(
-        (m) => m.status === 'ACTIVE' && m.school.status !== 'SUSPENDED'
+        (m) =>
+          m.status === 'ACTIVE' &&
+          m.school.status !== 'SUSPENDED' &&
+          m.role !== 'STUDENT'
       ),
     [memberships]
   );
@@ -81,6 +93,10 @@ export function WorkspacePage() {
     }
     return [...bySchool.values()];
   }, [activeMemberships]);
+
+  if (isStudentOnly) {
+    return <Navigate to="/student" replace />;
+  }
 
   if (uniqueSchools.length === 0) {
     return (
@@ -698,6 +714,13 @@ function StaffSchoolWorkspace({ schoolId }: { schoolId: string }) {
           )}
         </div>
       </div>
+
+      {isLeadership ? (
+        <SchoolAdminPortalPanel
+          schoolId={schoolId}
+          onMutated={() => void loadAudit()}
+        />
+      ) : null}
 
       {isLeadership ? (
         <section className="audit-section workspace-panel" aria-labelledby="audit-heading">

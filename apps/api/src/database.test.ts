@@ -15,7 +15,7 @@ function readMigrationSql(): string {
     .map((entry) => entry.name)
     .sort();
 
-  assert.ok(migrationNames.length > 0, 'At least one committed migration is required');
+  assert.ok(migrationNames.length >= 2, 'Expected foundation and student-portal migrations');
   return migrationNames
     .map((name) => fs.readFileSync(path.join(migrationsDir, name, 'migration.sql'), 'utf8'))
     .join('\n');
@@ -75,11 +75,24 @@ function parseModels(schema: string): ParsedModel[] {
   return models;
 }
 
+function collectMigratedTableStatements(sql: string, tableName: string): string {
+  const chunks: string[] = [];
+  const createMatch = sql.match(new RegExp(`CREATE TABLE "${tableName}" \\(([\\s\\S]*?)\\n\\);`));
+  if (createMatch) {
+    chunks.push(createMatch[1]);
+  }
+  const alterRegex = new RegExp(`ALTER TABLE "${tableName}"([\\s\\S]*?);`, 'g');
+  for (const alterMatch of sql.matchAll(alterRegex)) {
+    chunks.push(alterMatch[1]);
+  }
+  return chunks.join('\n');
+}
+
 const models = parseModels(schemaPrisma);
 const enums = enumNames(schemaPrisma);
 
 test('every Prisma enum and model has a committed migration definition with all columns', () => {
-  assert.equal(models.length, 14, 'Expected the 14 ORQELI Education & session models');
+  assert.equal(models.length, 18, 'Expected the 18 ORQELI Education, student portal & session models');
 
   for (const enumName of enums) {
     assert.match(
@@ -88,17 +101,20 @@ test('every Prisma enum and model has a committed migration definition with all 
       `Enum ${enumName} missing from migration.sql`
     );
   }
+  assert.match(
+    migrationSql,
+    /ALTER TYPE "SchoolRole" ADD VALUE 'STUDENT';/,
+    'SchoolRole enum must add STUDENT additively'
+  );
 
   for (const model of models) {
-    const createTable = migrationSql.match(
-      new RegExp(`CREATE TABLE "${model.tableName}" \\(([\\s\\S]*?)\\n\\);`)
-    );
-    assert.ok(createTable, `No CREATE TABLE "${model.tableName}" found in migrations`);
+    const tableSql = collectMigratedTableStatements(migrationSql, model.tableName);
+    assert.ok(tableSql.length > 0, `No migration DDL found for table "${model.tableName}"`);
 
     for (const column of model.columns) {
       const columnPattern = new RegExp(`"${column}"\\s`);
       assert.ok(
-        columnPattern.test(createTable[1]),
+        columnPattern.test(tableSql),
         `Column ${model.tableName}.${column} is modeled in Prisma but missing from migration.sql`
       );
     }
@@ -119,7 +135,7 @@ test('obsolete marketplace tables and enums are completely absent from schema an
   }
 });
 
-test('every domain academic table enforces school-level isolation via a schoolId foreign key', () => {
+test('every domain academic and student-portal table enforces school-level isolation via a schoolId foreign key', () => {
   const schoolTenantTables = [
     'SchoolMembership',
     'AcademicYear',
@@ -129,6 +145,10 @@ test('every domain academic table enforces school-level isolation via a schoolId
     'ClassSubjectAllocation',
     'Learner',
     'LearnerGuardianLink',
+    'LearnerStudentLink',
+    'StudentEnrolmentCode',
+    'StudentRegistrationRequest',
+    'SchoolAnnouncement',
     'TermResultPack',
     'SubjectMark'
   ];
@@ -144,6 +164,20 @@ test('every domain academic table enforces school-level isolation via a schoolId
       `${table} must enforce a foreign key to School(id)`
     );
   }
+
+  // Unique 1:1 learner-to-student-account and single-use hashed code constraints
+  assert.match(
+    migrationSql,
+    /CREATE UNIQUE INDEX "LearnerStudentLink_learnerId_key" ON "LearnerStudentLink"\("learnerId"\)/
+  );
+  assert.match(
+    migrationSql,
+    /CREATE UNIQUE INDEX "LearnerStudentLink_membershipId_key" ON "LearnerStudentLink"\("membershipId"\)/
+  );
+  assert.match(
+    migrationSql,
+    /CREATE UNIQUE INDEX "StudentEnrolmentCode_codeHash_key" ON "StudentEnrolmentCode"\("codeHash"\)/
+  );
 });
 
 test('the session table matches the connect-pg-simple SQL contract', () => {

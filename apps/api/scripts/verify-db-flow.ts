@@ -100,10 +100,12 @@ try {
   const schoolA = await prisma.school.create({
     data: {
       code: `SYN-VERIFY-A-${unique}`,
+      registrationNumber: `SYN-REG-VA-${unique}`,
       name: 'Verify School A (Synthetic)',
       sector: 'GOVERNMENT',
       province: 'Lusaka',
       district: 'Lusaka',
+      studentPortalEnabled: true,
       isSyntheticDemo: true
     }
   });
@@ -114,6 +116,7 @@ try {
       sector: 'PRIVATE',
       province: 'Copperbelt',
       district: 'Ndola',
+      studentPortalEnabled: false,
       isSyntheticDemo: true
     }
   });
@@ -347,6 +350,169 @@ try {
     auditCount >= 4,
     'PostgreSQL AuditEvent table records mark entry, submission, approval, and publication',
     auditCount
+  );
+
+  console.log('\n4. Public School Discovery, Student Enrolment Verification & IDOR Prevention');
+  const dirRes = await fetch(
+    `${baseUrl}/api/public/schools?q=${encodeURIComponent(schoolA.code)}`
+  );
+  const dirBody = (await dirRes.json()) as {
+    schools: Array<{ id: string; canSelfRegister: boolean }>;
+  };
+  check(
+    dirRes.status === 200 &&
+      dirBody.schools.length === 1 &&
+      dirBody.schools[0]?.canSelfRegister === true,
+    'Public school directory finds activated School A without exposing private data'
+  );
+
+  const disabledSchoolReg = await mutate('POST', '/api/student/register', {
+    schoolId: schoolB.id,
+    fullName: 'Blocked Student',
+    admissionNumber: 'SYN-B-001',
+    email: `blocked.${unique}@synthetic.orqeli.invalid`,
+    password: testPass,
+    verificationMode: 'STAFF_APPROVAL'
+  });
+  check(
+    disabledSchoolReg.status === 403,
+    'Student registration is rejected (403) when school student portal is disabled'
+  );
+
+  // Head Teacher creates a second learner and issues a single-use enrolment code
+  const createLearner2Res = await mutate(
+    'POST',
+    `/api/schools/${schoolA.id}/admin/learners`,
+    {
+      admissionNumber: 'SYN-V-002',
+      firstName: 'Second',
+      lastName: 'Student',
+      schoolClassId: cls.id,
+      preferredChannel: 'PRINT_REPORT'
+    },
+    headSession.cookie,
+    headSession.csrfToken
+  );
+  check(createLearner2Res.status === 201, 'Head Teacher creates learner roster record (201)');
+  const learner2Id = (
+    (await createLearner2Res.json()) as { learner: { id: string } }
+  ).learner.id;
+
+  const issueCodeRes = await mutate(
+    'POST',
+    `/api/schools/${schoolA.id}/admin/learners/${learner.id}/enrolment-codes`,
+    { expiresInDays: 14 },
+    headSession.cookie,
+    headSession.csrfToken
+  );
+  check(issueCodeRes.status === 201, 'Head Teacher issues hashed single-use enrolment code (201)');
+  const issuedCode = (
+    (await issueCodeRes.json()) as { enrolmentCode: { plainCode: string } }
+  ).enrolmentCode.plainCode;
+
+  // Student 1 registers via single-use enrolment code
+  const student1RegRes = await mutate('POST', '/api/student/register', {
+    schoolId: schoolA.id,
+    fullName: 'Synthetic Learner',
+    admissionNumber: 'SYN-V-001',
+    email: `student1.${unique}@synthetic.orqeli.invalid`,
+    password: testPass,
+    verificationMode: 'ENROLMENT_CODE',
+    enrolmentCode: issuedCode
+  });
+  check(
+    student1RegRes.status === 201,
+    'Student registers and verifies via single-use enrolment code (201)'
+  );
+  const student1Cookie = (student1RegRes.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+  if (student1Cookie) createdSids.push(cookieSid(student1Cookie));
+  const student1Body = (await student1RegRes.json()) as {
+    outcome: string;
+    user: { id: string };
+    csrfToken: string;
+  };
+  createdUserIds.push(student1Body.user.id);
+
+  // Code reuse must fail
+  const codeReuseRes = await mutate('POST', '/api/student/register', {
+    schoolId: schoolA.id,
+    fullName: 'Reuse Attempt',
+    admissionNumber: 'SYN-V-001',
+    email: `reuse.${unique}@synthetic.orqeli.invalid`,
+    password: testPass,
+    verificationMode: 'ENROLMENT_CODE',
+    enrolmentCode: issuedCode
+  });
+  check(
+    codeReuseRes.status === 400,
+    'Single-use enrolment code cannot be reused after consumption (400)'
+  );
+
+  // Student 1 accesses own published results & report card, and is blocked from Learner 2 (IDOR)
+  const portalRes = await fetch(`${baseUrl}/api/student/portal`, {
+    headers: { cookie: student1Cookie }
+  });
+  const portalBody = (await portalRes.json()) as {
+    accounts: Array<{
+      verificationState: string;
+      termResults: Array<{ publicationState: string }>;
+    }>;
+  };
+  check(
+    portalRes.status === 200 &&
+      portalBody.accounts[0]?.verificationState === 'VERIFIED' &&
+      portalBody.accounts[0]?.termResults[0]?.publicationState === 'PUBLISHED',
+    'Verified student portal returns published term results'
+  );
+
+  const ownReportRes = await fetch(
+    `${baseUrl}/api/student/schools/${schoolA.id}/learners/${learner.id}/report-cards/${pack.id}`,
+    { headers: { cookie: student1Cookie } }
+  );
+  check(ownReportRes.status === 200, 'Verified student fetches own published report card (200)');
+
+  const idorAttemptRes = await fetch(
+    `${baseUrl}/api/student/schools/${schoolA.id}/learners/${learner2Id}/report-cards/${pack.id}`,
+    { headers: { cookie: student1Cookie } }
+  );
+  check(
+    idorAttemptRes.status === 403,
+    'Server blocks student IDOR attempt against another learner ID (403)'
+  );
+
+  // Student 2 registers via STAFF_APPROVAL -> pending -> approved by Head Teacher
+  const student2RegRes = await mutate('POST', '/api/student/register', {
+    schoolId: schoolA.id,
+    fullName: 'Second Student',
+    admissionNumber: 'SYN-V-002',
+    email: `student2.${unique}@synthetic.orqeli.invalid`,
+    password: testPass,
+    verificationMode: 'STAFF_APPROVAL',
+    classHint: 'Grade 9A'
+  });
+  check(
+    student2RegRes.status === 201,
+    'Student submits pending staff-approval registration request (201)'
+  );
+  const student2Cookie = (student2RegRes.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+  if (student2Cookie) createdSids.push(cookieSid(student2Cookie));
+  const student2Body = (await student2RegRes.json()) as {
+    outcome: string;
+    requestId: string;
+    user: { id: string };
+  };
+  createdUserIds.push(student2Body.user.id);
+
+  const approveStudent2Res = await mutate(
+    'POST',
+    `/api/schools/${schoolA.id}/admin/student-requests/${student2Body.requestId}/approve`,
+    { learnerId: learner2Id, decisionNotes: 'Verified against Grade 9A register.' },
+    headSession.cookie,
+    headSession.csrfToken
+  );
+  check(
+    approveStudent2Res.status === 200,
+    'Head Teacher approves pending student registration request and links learner (200)'
   );
 } finally {
   await prisma.auditEvent.deleteMany({

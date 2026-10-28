@@ -131,11 +131,29 @@ This starts `@orqeli/api` with `DATA_STORE_MODE=memory-sandbox` (pre-loaded with
 
 ## Core API Endpoints
 
+### Public School Discovery & Auth
 - `GET /api/health` — Process liveness and runtime stage check (`{ status: "ok", service: "orqeli-education-api", stage: "early-stage-foundation", sandboxMode }`).
+- `GET /api/public/schools` — Rate-limited public school directory search by name, location (`province`, district), `sector`, school `code` / registration number, and `portalOnly`, returning strictly approved public fields (zero staff/learner/mark records).
+- `GET /api/public/schools/:codeOrId` — Public school profile and student-portal activation state (`canSelfRegister`).
 - `GET /api/auth/csrf` — Issues a signed CSRF token required in `X-CSRF-Token` on all `POST`/`PUT`/`PATCH`/`DELETE` requests.
-- `POST /api/auth/login` — Authenticates email/password with Argon2id, rotates session ID, and returns user + school memberships.
+- `POST /api/student/register` — Rate-limited student registration requiring school selection, learner admission number, and either a single-use SHA-256 hashed school enrolment code (`ENROLMENT_CODE`) or a pending school-verification request (`STAFF_APPROVAL`). Never links accounts by name/class/DOB alone and never leaks whether an admission number exists on public endpoints.
+- `POST /api/auth/login` — Rate-limited Argon2id email/password login, session ID rotation, and role-aware membership lookup.
 - `POST /api/auth/logout` — Destroys server-side session and clears cookie.
-- `GET /api/auth/me` — Returns current session user and active school memberships.
+- `GET /api/auth/me` — Returns current session user and school memberships.
+
+### Student Academic Portal (`STUDENT` Role)
+- `GET /api/student/portal` — CBU OPUS-inspired student academic dashboard returning verified school/class identity, published term results (subject marks, percentages, grade bands, teacher remarks), explicit unpublished-term status notices, school announcements, and pending verification request status.
+- `GET /api/student/schools/:schoolId/learners/:learnerId/report-cards/:packId` — Printable A4 student report card strictly restricted (`403 STUDENT_LEARNER_ACCESS_DENIED`) to the authenticated student's own `LearnerStudentLink` and `PUBLISHED` packs only.
+
+### School Leadership Student & Roster Administration (`DEPUTY_HEAD`, `HEAD_TEACHER`, `SCHOOL_ADMIN`)
+- `GET /api/schools/:schoolId/admin/student-portal` — School-isolated roster, active enrolment code hints, pending student registration requests, and announcements.
+- `POST /api/schools/:schoolId/admin/learners` — Adds a learner record to the school roster (audited).
+- `POST /api/schools/:schoolId/admin/learners/:learnerId/enrolment-codes` — Generates/rotates a single-use expiring enrolment code (plain code returned once; only SHA-256 hash stored).
+- `POST /api/schools/:schoolId/admin/enrolment-codes/:codeId/revoke` — Revokes an unused enrolment code.
+- `POST /api/schools/:schoolId/admin/student-requests/:requestId/approve` & `/reject` — Approves & links (or rejects with notes) a pending student registration request, blocking self-approval and cross-school linking.
+- `POST /api/schools/:schoolId/admin/announcements` — Publishes a school or results-publication notice (`STUDENTS_AND_STAFF` or `STAFF_ONLY`).
+
+### Academic Marks & Approval Workflow (`STAFF` Roles)
 - `GET /api/schools/:schoolId/overview` — School academic calendar, subject allocations, and result-pack completeness summary (`STAFF` roles in `:schoolId` only).
 - `GET /api/schools/:schoolId/result-packs/:packId` — Class-term mark matrix, subject permissions, and missing-entry detector.
 - `PUT /api/schools/:schoolId/result-packs/:packId/marks` — Records/updates marks for an allocated subject teacher while pack is `DRAFT` or `NEEDS_REVISION`, writing before/after `AuditEvent` records.
@@ -144,8 +162,20 @@ This starts `@orqeli/api` with `DATA_STORE_MODE=memory-sandbox` (pre-loaded with
 - `POST /api/schools/:schoolId/result-packs/:packId/approve` — Approves a `SUBMITTED` complete pack (`HEAD_TEACHER` or `SCHOOL_ADMIN` only).
 - `POST /api/schools/:schoolId/result-packs/:packId/publish` — Publishes an `APPROVED` pack (`409 APPROVAL_REQUIRED_BEFORE_PUBLICATION` if not yet approved).
 - `GET /api/schools/:schoolId/result-packs/:packId/report-cards/:learnerId` — Structured printable report card for `APPROVED` (staff preview) or `PUBLISHED` packs.
-- `GET /api/schools/:schoolId/guardian/results` — Returns **strictly `PUBLISHED`** report cards for learners linked to an authenticated `PARENT_GUARDIAN` in `:schoolId`.
 - `GET /api/schools/:schoolId/audit-events` — School-scoped audit log (`DEPUTY_HEAD`, `HEAD_TEACHER`, `SCHOOL_ADMIN`).
+
+---
+
+## Synthetic Sandbox Walkthrough
+
+All synthetic sandbox accounts share the password `SyntheticDemo!2026`:
+
+1. **Public School Discovery (`/schools`)**: Search by `Lukanga`, `Lusaka`, or `SYN-ZM-LUS-01`. Inspect `Mindolo Community Day Secondary` (`SYN-ZM-CB-03`) to see a directory-listed school whose student portal is not yet enabled.
+2. **Instant Student Verification (`/student/register`)**: Select `Lukanga Day Secondary`, enter Admission Number `SYN-2026-0802` (`Chisomo Banda`) and single-use Enrolment Code `ORQ-8B02-2026` to verify immediately and open `/student`.
+3. **Pending Approval Flow**: Sign in as `student.pending@synthetic.orqeli.invalid` (sees pending status with zero academic marks), then sign in as Head Teacher `head.mulenga@synthetic.orqeli.invalid` in `/workspace` to approve and link `Bupe Kasonde` (`SYN-2026-0903`).
+4. **Verified OPUS-Style Student Portal (`/student`)**: Sign in as `student.lubasi@synthetic.orqeli.invalid` (`SYN-2026-0801`) to view published Term 2 marks/grades, open the printable A4 report card, and confirm Term 3 (`DRAFT`) marks remain hidden.
+
+> **GitHub Pages Static Preview Limitation:** When built with `VITE_STATIC_SANDBOX=true` for GitHub Pages (`https://arabninja-hub.github.io/ORQELI/`), all workflow state runs in browser `sessionStorage` inside a single tab because GitHub Pages cannot host Node.js or PostgreSQL. Real server-side authentication, Argon2id password hashing, SHA-256 enrolment code verification, CSRF/session cookies, rate limiting, and durable audit logs require running `@orqeli/api` backed by PostgreSQL.
 
 ---
 

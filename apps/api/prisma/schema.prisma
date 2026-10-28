@@ -36,6 +36,7 @@ enum SchoolRole {
   DEPUTY_HEAD
   TEACHER
   PARENT_GUARDIAN
+  STUDENT
 }
 
 enum MembershipStatus {
@@ -70,70 +71,103 @@ enum CommunicationChannel {
   GUARDIAN_PORTAL
 }
 
+enum StudentVerificationMethod {
+  ENROLMENT_CODE
+  STAFF_APPROVAL
+}
+
+enum StudentRegistrationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AnnouncementAudience {
+  STUDENTS_AND_STAFF
+  STAFF_ONLY
+}
+
 model User {
-  id           String             @id @default(cuid())
-  email        String?            @unique
-  phone        String?            @unique
-  name         String
-  passwordHash String?
-  platformRole PlatformRole       @default(STANDARD)
-  status       UserStatus         @default(ACTIVE)
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
-  memberships  SchoolMembership[]
-  auditEvents  AuditEvent[]       @relation("AuditActorUser")
+  id                   String                       @id @default(cuid())
+  email                String?                      @unique
+  phone                String?                      @unique
+  name                 String
+  passwordHash         String?
+  platformRole         PlatformRole                 @default(STANDARD)
+  status               UserStatus                   @default(ACTIVE)
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  memberships          SchoolMembership[]
+  usedEnrolmentCodes   StudentEnrolmentCode[]       @relation("EnrolmentCodeUsedByUser")
+  registrationRequests StudentRegistrationRequest[] @relation("StudentRegistrationApplicant")
+  auditEvents          AuditEvent[]                 @relation("AuditActorUser")
 }
 
 model School {
-  id               String                   @id @default(cuid())
-  code             String                   @unique
-  name             String
-  sector           SchoolSector
-  province         String
-  district         String
-  phone            String?
-  email            String?
-  timezone         String                   @default("Africa/Lusaka")
-  isSyntheticDemo  Boolean                  @default(true)
-  status           SchoolStatus             @default(PILOT_PREP)
-  createdAt        DateTime                 @default(now())
-  updatedAt        DateTime                 @updatedAt
-  memberships      SchoolMembership[]
-  academicYears    AcademicYear[]
-  academicTerms    AcademicTerm[]
-  classes          SchoolClass[]
-  subjects         Subject[]
-  allocations      ClassSubjectAllocation[]
-  learners         Learner[]
-  guardianLinks    LearnerGuardianLink[]
-  resultPacks      TermResultPack[]
-  subjectMarks     SubjectMark[]
-  auditEvents      AuditEvent[]
+  id                   String                       @id @default(cuid())
+  code                 String                       @unique
+  registrationNumber   String?                      @unique
+  name                 String
+  sector               SchoolSector
+  province             String
+  district             String
+  levelSummary         String                       @default("Secondary (Grades 8-12)")
+  publicDescription    String?
+  studentPortalEnabled Boolean                      @default(false)
+  phone                String?
+  email                String?
+  timezone             String                       @default("Africa/Lusaka")
+  isSyntheticDemo      Boolean                      @default(true)
+  status               SchoolStatus                 @default(PILOT_PREP)
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  memberships          SchoolMembership[]
+  academicYears        AcademicYear[]
+  academicTerms        AcademicTerm[]
+  classes              SchoolClass[]
+  subjects             Subject[]
+  allocations          ClassSubjectAllocation[]
+  learners             Learner[]
+  guardianLinks        LearnerGuardianLink[]
+  studentLinks         LearnerStudentLink[]
+  enrolmentCodes       StudentEnrolmentCode[]
+  registrationRequests StudentRegistrationRequest[]
+  announcements        SchoolAnnouncement[]
+  resultPacks          TermResultPack[]
+  subjectMarks         SubjectMark[]
+  auditEvents          AuditEvent[]
 
   @@index([province, district])
   @@index([status])
+  @@index([status, studentPortalEnabled])
 }
 
 model SchoolMembership {
-  id                     String                   @id @default(cuid())
-  schoolId               String
-  school                 School                   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  userId                 String
-  user                   User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role                   SchoolRole
-  status                 MembershipStatus         @default(ACTIVE)
-  staffCode              String?
-  createdAt              DateTime                 @default(now())
-  updatedAt              DateTime                 @updatedAt
-  homeroomClasses        SchoolClass[]            @relation("ClassTeacherMembership")
-  subjectAllocations     ClassSubjectAllocation[] @relation("AllocatedTeacherMembership")
-  guardianLinks          LearnerGuardianLink[]
-  submittedResultPacks   TermResultPack[]         @relation("PackSubmittedBy")
-  reviewedResultPacks    TermResultPack[]         @relation("PackReviewedBy")
-  approvedResultPacks    TermResultPack[]         @relation("PackApprovedBy")
-  publishedResultPacks   TermResultPack[]         @relation("PackPublishedBy")
-  enteredMarks           SubjectMark[]            @relation("MarkEnteredBy")
-  auditEvents            AuditEvent[]             @relation("AuditActorMembership")
+  id                           String                       @id @default(cuid())
+  schoolId                     String
+  school                       School                       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  userId                       String
+  user                         User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role                         SchoolRole
+  status                       MembershipStatus             @default(ACTIVE)
+  staffCode                    String?
+  createdAt                    DateTime                     @default(now())
+  updatedAt                    DateTime                     @updatedAt
+  homeroomClasses              SchoolClass[]                @relation("ClassTeacherMembership")
+  subjectAllocations           ClassSubjectAllocation[]     @relation("AllocatedTeacherMembership")
+  guardianLinks                LearnerGuardianLink[]
+  studentLink                  LearnerStudentLink?          @relation("StudentAccountMembership")
+  verifiedStudentLinks         LearnerStudentLink[]         @relation("StudentLinkVerifiedBy")
+  createdEnrolmentCodes        StudentEnrolmentCode[]       @relation("EnrolmentCodeCreatedBy")
+  revokedEnrolmentCodes        StudentEnrolmentCode[]       @relation("EnrolmentCodeRevokedBy")
+  reviewedRegistrationRequests StudentRegistrationRequest[] @relation("RegistrationReviewedBy")
+  publishedAnnouncements       SchoolAnnouncement[]         @relation("AnnouncementPublishedBy")
+  submittedResultPacks         TermResultPack[]             @relation("PackSubmittedBy")
+  reviewedResultPacks          TermResultPack[]             @relation("PackReviewedBy")
+  approvedResultPacks          TermResultPack[]             @relation("PackApprovedBy")
+  publishedResultPacks         TermResultPack[]             @relation("PackPublishedBy")
+  enteredMarks                 SubjectMark[]                @relation("MarkEnteredBy")
+  auditEvents                  AuditEvent[]                 @relation("AuditActorMembership")
 
   @@unique([schoolId, userId, role])
   @@index([userId, status])
@@ -233,22 +267,25 @@ model ClassSubjectAllocation {
 }
 
 model Learner {
-  id               String                @id @default(cuid())
-  schoolId         String
-  school           School                @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  admissionNumber  String
-  firstName        String
-  lastName         String
-  schoolClassId    String?
-  schoolClass      SchoolClass?          @relation(fields: [schoolClassId], references: [id], onDelete: SetNull)
-  guardianName     String?
-  guardianPhone    String?
-  preferredChannel CommunicationChannel  @default(PRINT_REPORT)
-  active           Boolean               @default(true)
-  createdAt        DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
-  guardianLinks    LearnerGuardianLink[]
-  marks            SubjectMark[]
+  id                   String                       @id @default(cuid())
+  schoolId             String
+  school               School                       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  admissionNumber      String
+  firstName            String
+  lastName             String
+  schoolClassId        String?
+  schoolClass          SchoolClass?                 @relation(fields: [schoolClassId], references: [id], onDelete: SetNull)
+  guardianName         String?
+  guardianPhone        String?
+  preferredChannel     CommunicationChannel         @default(PRINT_REPORT)
+  active               Boolean                      @default(true)
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  guardianLinks        LearnerGuardianLink[]
+  studentLink          LearnerStudentLink?
+  enrolmentCodes       StudentEnrolmentCode[]
+  registrationRequests StudentRegistrationRequest[]
+  marks                SubjectMark[]
 
   @@unique([schoolId, admissionNumber])
   @@index([schoolId, schoolClassId, active])
@@ -267,6 +304,83 @@ model LearnerGuardianLink {
 
   @@unique([membershipId, learnerId])
   @@index([schoolId, learnerId])
+}
+
+model LearnerStudentLink {
+  id                     String                    @id @default(cuid())
+  schoolId               String
+  school                 School                    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  membershipId           String                    @unique
+  membership             SchoolMembership          @relation("StudentAccountMembership", fields: [membershipId], references: [id], onDelete: Cascade)
+  learnerId              String                    @unique
+  learner                Learner                   @relation(fields: [learnerId], references: [id], onDelete: Cascade)
+  verifiedByMembershipId String?
+  verifiedBy             SchoolMembership?         @relation("StudentLinkVerifiedBy", fields: [verifiedByMembershipId], references: [id], onDelete: SetNull)
+  verificationMethod     StudentVerificationMethod
+  createdAt              DateTime                  @default(now())
+
+  @@index([schoolId])
+}
+
+model StudentEnrolmentCode {
+  id                    String            @id @default(cuid())
+  schoolId              String
+  school                School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  learnerId             String
+  learner               Learner           @relation(fields: [learnerId], references: [id], onDelete: Cascade)
+  codeHash              String            @unique
+  codeHint              String
+  expiresAt             DateTime
+  usedAt                DateTime?
+  usedByUserId          String?
+  usedByUser            User?             @relation("EnrolmentCodeUsedByUser", fields: [usedByUserId], references: [id], onDelete: SetNull)
+  revokedAt             DateTime?
+  revokedByMembershipId String?
+  revokedBy             SchoolMembership? @relation("EnrolmentCodeRevokedBy", fields: [revokedByMembershipId], references: [id], onDelete: SetNull)
+  createdByMembershipId String
+  createdBy             SchoolMembership  @relation("EnrolmentCodeCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Restrict)
+  createdAt             DateTime          @default(now())
+
+  @@index([schoolId, learnerId])
+  @@index([schoolId, expiresAt])
+}
+
+model StudentRegistrationRequest {
+  id                       String                    @id @default(cuid())
+  schoolId                 String
+  school                   School                    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  userId                   String
+  user                     User                      @relation("StudentRegistrationApplicant", fields: [userId], references: [id], onDelete: Cascade)
+  submittedAdmissionNumber String
+  applicantName            String
+  classHint                String?
+  status                   StudentRegistrationStatus @default(PENDING)
+  linkedLearnerId          String?
+  linkedLearner            Learner?                  @relation(fields: [linkedLearnerId], references: [id], onDelete: SetNull)
+  reviewedByMembershipId   String?
+  reviewedBy               SchoolMembership?         @relation("RegistrationReviewedBy", fields: [reviewedByMembershipId], references: [id], onDelete: SetNull)
+  reviewedAt               DateTime?
+  decisionNotes            String?
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+
+  @@index([schoolId, status, createdAt])
+  @@index([userId, status])
+}
+
+model SchoolAnnouncement {
+  id                      String               @id @default(cuid())
+  schoolId                String
+  school                  School               @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title                   String
+  body                    String
+  audience                AnnouncementAudience @default(STUDENTS_AND_STAFF)
+  publishedByMembershipId String?
+  publishedBy             SchoolMembership?    @relation("AnnouncementPublishedBy", fields: [publishedByMembershipId], references: [id], onDelete: SetNull)
+  publishedAt             DateTime             @default(now())
+  createdAt               DateTime             @default(now())
+
+  @@index([schoolId, publishedAt])
 }
 
 model TermResultPack {

@@ -1813,3 +1813,575 @@ code,
   background: rgba(255, 255, 255, 0.2);
 }
 
+/* ============================================================================
+   Public School Discovery, Student Registration & CBU OPUS-Inspired Portal
+   ============================================================================ */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+  border: 1px solid transparent;
+}
+
+.pill-neutral {
+  background: var(--surface-alt);
+  color: var(--ink);
+  border-color: var(--border);
+}
+
+.pill-info {
+  background: var(--teal-50);
+  color: var(--teal-700);
+  border-color: #b7e2df;
+}
+
+.pill-warning {
+  background: var(--amber-50);
+  color: var(--amber-800);
+  border-color: #fde68a;
+}
+
+.pill-published {
+  background: var(--green-50);
+  color: var(--green-800);
+  border-color: #bbf7d0;
+}
+
+.pack-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.workspace-header-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.workspace-header-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.breadcrumb-row {
+  margin-bottom: 14px;
+}
+
+.directory-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) minmax(140px, 1fr) auto auto;
+  gap: 12px;
+  align-items: end;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.directory-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 10px 4px;
+  cursor: pointer;
+}
+
+.directory-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.school-directory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.school-directory-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.school-directory-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.school-directory-card h2 {
+  font-size: 18px;
+}
+
+.school-code-chip {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.school-location-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.school-meta-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 4px 0;
+  padding: 10px 12px;
+  background: var(--surface-alt);
+  border-radius: var(--radius-sm);
+}
+
+.school-meta-strip dt,
+.profile-detail-grid dt,
+.opus-identity-strip dt {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+}
+
+.school-meta-strip dd,
+.profile-detail-grid dd,
+.opus-identity-strip dd {
+  margin: 3px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.profile-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 8px 0;
+  padding: 16px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.portal-cta-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  background: var(--teal-50);
+  border: 1px solid #b7e2df;
+  border-radius: var(--radius-md);
+}
+
+.portal-cta-box h2 {
+  font-size: 18px;
+  margin-bottom: 4px;
+}
+
+/* Student Registration Verification Selector */
+.verification-mode-fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin: 0;
+}
+
+.verification-mode-fieldset legend {
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 6px;
+}
+
+.verification-mode-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.mode-option.active {
+  border-color: var(--teal-600);
+  background: var(--teal-50);
+}
+
+.mode-option strong {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13.5px;
+}
+
+.mode-option span {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  margin-top: 3px;
+}
+
+.compact-check-list {
+  margin: 12px 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.sandbox-walkthrough-box {
+  margin-top: 16px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* CBU OPUS-Inspired Academic Student Portal */
+.opus-banner-card {
+  background: var(--navy-900);
+  color: #ffffff;
+  border-radius: var(--radius-lg);
+  padding: 22px 24px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.opus-banner-card .eyebrow {
+  color: #8ce2dc;
+}
+
+.opus-banner-card .muted-line,
+.opus-school-line {
+  color: #d6e4ec;
+  font-size: 15px;
+  margin-top: 4px;
+}
+
+.opus-banner-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.opus-identity-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-md);
+}
+
+.opus-identity-strip dt {
+  color: #b4cad8;
+}
+
+.opus-identity-strip dd {
+  color: #ffffff;
+}
+
+.opus-tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.opus-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+
+.opus-tab.active {
+  background: var(--teal-700);
+  border-color: var(--teal-700);
+  color: #ffffff;
+}
+
+.opus-section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.opus-term-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.opus-term-unpublished {
+  background: var(--surface-alt);
+  border-style: dashed;
+}
+
+.opus-term-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.opus-summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.opus-metric-box {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.opus-metric-box span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.opus-metric-box strong {
+  font-size: 20px;
+  color: var(--navy-900);
+}
+
+.grade-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--teal-50);
+  border: 1px solid #b7e2df;
+  color: var(--teal-700);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+/* School Leadership Student Portal & Roster Admin Panel */
+.admin-student-portal-section {
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.admin-subpanel {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.admin-subpanel h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 16px;
+}
+
+.issued-code-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+  background: var(--amber-50);
+  border: 1px solid #fcd34d;
+  border-radius: var(--radius-md);
+}
+
+.issued-code-value {
+  font-size: 18px;
+  font-weight: 700;
+  padding: 8px 14px;
+  background: #ffffff;
+  border: 1px solid var(--amber-700);
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.06em;
+}
+
+.admin-request-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-request-card {
+  padding: 14px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-request-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-request-controls select,
+.admin-request-controls input {
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  min-width: 190px;
+}
+
+.admin-inline-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr)) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-inline-form input,
+.admin-inline-form select,
+.admin-notice-form input,
+.admin-notice-form select,
+.admin-notice-form textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  width: 100%;
+}
+
+.admin-notice-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-notice-top-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 10px;
+}
+
+.callout-success {
+  background: var(--green-50);
+  border: 1px solid #bbf7d0;
+  color: var(--green-800);
+}
+
+.callout-warning {
+  background: var(--amber-50);
+  border: 1px solid #fde68a;
+  color: var(--amber-800);
+}
+
+@media (max-width: 900px) {
+  .directory-filter-bar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .directory-search-field {
+    grid-column: 1 / -1;
+  }
+
+  .profile-detail-grid,
+  .opus-identity-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .admin-inline-form {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .directory-filter-bar,
+  .school-directory-grid,
+  .profile-detail-grid,
+  .verification-mode-grid,
+  .opus-identity-strip,
+  .opus-summary-metrics,
+  .admin-inline-form,
+  .admin-notice-top-row {
+    grid-template-columns: 1fr;
+  }
+
+  .opus-tab {
+    flex: 1 1 calc(50% - 8px);
+    justify-content: center;
+  }
+}
+

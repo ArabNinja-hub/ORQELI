@@ -36,13 +36,24 @@ import {
   type StoredUserWithMemberships
 } from './repository.js';
 import {
+  approveStudentRegistrationSchema,
+  createAnnouncementSchema,
+  createLearnerSchema,
+  issueEnrolmentCodeSchema,
   loginSchema,
+  publicSchoolSearchQuerySchema,
   recordMarksSchema,
+  rejectStudentRegistrationSchema,
   requestRevisionSchema,
-  resourceIdSchema
+  resourceIdSchema,
+  schoolLookupParamSchema,
+  studentRegistrationSchema
 } from './schemas.js';
+import { createRateLimitMiddleware } from './rateLimit.js';
 import {
   SANDBOX_PERSONAS,
+  SYNTHETIC_DEMO_ENROLMENT_ADMISSION_NO,
+  SYNTHETIC_DEMO_ENROLMENT_CODE,
   SYNTHETIC_SANDBOX_CREDENTIAL,
   populateSyntheticInMemoryDataset
 } from './syntheticData.js';
@@ -99,6 +110,12 @@ export interface CreateAppOptions {
   config?: AppEnv;
   repository?: EducationRepository;
   sessionStore?: session.Store;
+  rateLimits?: {
+    publicDirectoryMaxPerMinute?: number;
+    authMaxPerWindow?: number;
+    registrationMaxPerWindow?: number;
+    windowMs?: number;
+  };
 }
 
 export function createApp(options: CreateAppOptions = {}) {
@@ -175,10 +192,70 @@ export function createApp(options: CreateAppOptions = {}) {
       return res.json({
         syntheticOnly: true,
         credentialHint: SYNTHETIC_SANDBOX_CREDENTIAL,
+        demoEnrolmentWalkthrough: {
+          schoolCode: 'SYN-ZM-LUS-01',
+          admissionNumber: SYNTHETIC_DEMO_ENROLMENT_ADMISSION_NO,
+          enrolmentCode: SYNTHETIC_DEMO_ENROLMENT_CODE
+        },
         personas: SANDBOX_PERSONAS
       });
     });
   }
+
+  const rateWindowMs = options.rateLimits?.windowMs ?? 60_000;
+  const publicSchoolsLimiter = createRateLimitMiddleware({
+    windowMs: rateWindowMs,
+    maxRequests: options.rateLimits?.publicDirectoryMaxPerMinute ?? 120,
+    keyPrefix: 'public-schools'
+  });
+  const loginLimiter = createRateLimitMiddleware({
+    windowMs: rateWindowMs,
+    maxRequests: options.rateLimits?.authMaxPerWindow ?? 30,
+    keyPrefix: 'auth-login',
+    message: 'Too many sign-in attempts. Please wait a minute before trying again.'
+  });
+  const studentRegisterLimiter = createRateLimitMiddleware({
+    windowMs: rateWindowMs,
+    maxRequests: options.rateLimits?.registrationMaxPerWindow ?? 15,
+    keyPrefix: 'student-register',
+    message:
+      'Too many student registration attempts from this network. Please wait a minute before trying again.'
+  });
+
+  // Public School Discovery Endpoints (read-only, rate-limited, no private learner/staff data)
+  instance.get('/api/public/schools', publicSchoolsLimiter, async (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const filters = publicSchoolSearchQuerySchema.parse(req.query ?? {});
+      const schools = await repository.listPublicSchools(filters);
+      return res.json({ schools });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  instance.get(
+    '/api/public/schools/:codeOrId',
+    publicSchoolsLimiter,
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const codeOrId = schoolLookupParamSchema.parse(req.params.codeOrId);
+        const school = await repository.getPublicSchoolProfile(codeOrId);
+        if (!school) {
+          return res.status(404).json({
+            error: {
+              code: 'SCHOOL_NOT_FOUND',
+              message: 'Public school profile was not found.'
+            }
+          });
+        }
+        return res.json({ school });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
 
   const sessionMiddleware = createSessionMiddleware(config, sessionStore);
   const csrfMiddleware = createCsrfProtectionMiddleware(config);
@@ -242,7 +319,7 @@ export function createApp(options: CreateAppOptions = {}) {
     return res.json({ csrfToken });
   });
 
-  instance.post('/api/auth/login', async (req, res, next) => {
+  instance.post('/api/auth/login', loginLimiter, async (req, res, next) => {
     res.set('Cache-Control', 'no-store');
     try {
       const parsed = loginSchema.parse(req.body ?? {});
@@ -347,6 +424,93 @@ export function createApp(options: CreateAppOptions = {}) {
       ...(sandboxSessionToken ? { sandboxSessionToken } : {})
     });
   });
+
+  instance.post(
+    '/api/student/register',
+    studentRegisterLimiter,
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const parsed = studentRegistrationSchema.parse(req.body ?? {});
+        const passwordHash = await hashPassword(parsed.password);
+        const registration = await repository.registerStudentAccount({
+          schoolId: parsed.schoolId,
+          fullName: parsed.fullName,
+          admissionNumber: parsed.admissionNumber,
+          email: parsed.email,
+          passwordHash,
+          verificationMode: parsed.verificationMode,
+          enrolmentCode: parsed.enrolmentCode,
+          classHint: parsed.classHint
+        });
+
+        const csrfSecret = await regenerateAuthenticatedSession(req, registration.user.id);
+        const csrfToken = createCsrfToken(config.SESSION_SECRET, csrfSecret);
+        const sandboxSessionToken = isMemorySandbox
+          ? createSandboxSessionToken(config.SESSION_SECRET, {
+              userId: registration.user.id,
+              csrfSecret,
+              ttlHours: config.SESSION_TTL_HOURS
+            })
+          : undefined;
+
+        return res.status(201).json({
+          outcome: registration.outcome,
+          schoolCode: registration.schoolCode,
+          requestId: registration.requestId,
+          message: registration.message,
+          user: toSafeUser(registration.user),
+          memberships: toSafeMemberships(registration.user),
+          csrfToken,
+          ...(sandboxSessionToken ? { sandboxSessionToken } : {})
+        });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  // ==========================================================================
+  // Student Portal & IDOR-Safe Student Report Card Routes
+  // ==========================================================================
+
+  instance.get('/api/student/portal', requireAuth(), async (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const overview = await repository.getStudentPortalOverview(req.user!.id);
+      return res.json(overview);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  instance.get(
+    '/api/student/schools/:schoolId/learners/:learnerId/report-cards/:packId',
+    requireSchoolRole('STUDENT'),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const learnerId = resourceIdSchema.parse(req.params.learnerId);
+        const packId = resourceIdSchema.parse(req.params.packId);
+        const reportCard = await repository.getReportCardForStudent(
+          req.schoolAccess!,
+          packId,
+          learnerId
+        );
+        if (!reportCard) {
+          return res.status(404).json({
+            error: {
+              code: 'NOT_FOUND',
+              message: 'Published report card was not found for your student record.'
+            }
+          });
+        }
+        return res.json({ reportCard });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
 
   // ==========================================================================
   // School-Scoped Academic & Results Workflow Routes
@@ -533,6 +697,137 @@ export function createApp(options: CreateAppOptions = {}) {
       try {
         const events = await repository.listSchoolAuditEvents(req.schoolAccess!);
         return res.json({ events });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  // ==========================================================================
+  // School Leadership Student Portal, Roster & Announcement Administration
+  // ==========================================================================
+
+  instance.get(
+    '/api/schools/:schoolId/admin/student-portal',
+    requireSchoolRole(...LEADERSHIP_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const state = await repository.getSchoolAdminPortalState(req.schoolAccess!);
+        if (!state) {
+          return res.status(404).json({
+            error: { code: 'NOT_FOUND', message: 'School administration state not found.' }
+          });
+        }
+        return res.json(state);
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  instance.post(
+    '/api/schools/:schoolId/admin/learners',
+    requireSchoolRole(...LEADERSHIP_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const parsed = createLearnerSchema.parse(req.body ?? {});
+        const learner = await repository.createSchoolLearner(req.schoolAccess!, parsed);
+        return res.status(201).json({ learner });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  instance.post(
+    '/api/schools/:schoolId/admin/learners/:learnerId/enrolment-codes',
+    requireSchoolRole(...LEADERSHIP_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const learnerId = resourceIdSchema.parse(req.params.learnerId);
+        const parsed = issueEnrolmentCodeSchema.parse(req.body ?? {});
+        const issued = await repository.issueLearnerEnrolmentCode(
+          req.schoolAccess!,
+          learnerId,
+          parsed.expiresInDays
+        );
+        return res.status(201).json({ enrolmentCode: issued });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  instance.post(
+    '/api/schools/:schoolId/admin/enrolment-codes/:codeId/revoke',
+    requireSchoolRole(...LEADERSHIP_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const codeId = resourceIdSchema.parse(req.params.codeId);
+        await repository.revokeLearnerEnrolmentCode(req.schoolAccess!, codeId);
+        return res.status(200).json({ status: 'revoked' });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  instance.post(
+    '/api/schools/:schoolId/admin/student-requests/:requestId/approve',
+    requireSchoolRole(...LEADERSHIP_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const requestId = resourceIdSchema.parse(req.params.requestId);
+        const parsed = approveStudentRegistrationSchema.parse(req.body ?? {});
+        const request = await repository.approveStudentRegistrationRequest(
+          req.schoolAccess!,
+          requestId,
+          parsed
+        );
+        return res.status(200).json({ request });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  instance.post(
+    '/api/schools/:schoolId/admin/student-requests/:requestId/reject',
+    requireSchoolRole(...LEADERSHIP_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const requestId = resourceIdSchema.parse(req.params.requestId);
+        const parsed = rejectStudentRegistrationSchema.parse(req.body ?? {});
+        const request = await repository.rejectStudentRegistrationRequest(
+          req.schoolAccess!,
+          requestId,
+          parsed
+        );
+        return res.status(200).json({ request });
+      } catch (error) {
+        return next(error);
+      }
+    }
+  );
+
+  instance.post(
+    '/api/schools/:schoolId/admin/announcements',
+    requireSchoolRole(...LEADERSHIP_ROLES),
+    async (req, res, next) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        const parsed = createAnnouncementSchema.parse(req.body ?? {});
+        const announcement = await repository.createSchoolAnnouncement(
+          req.schoolAccess!,
+          parsed
+        );
+        return res.status(201).json({ announcement });
       } catch (error) {
         return next(error);
       }

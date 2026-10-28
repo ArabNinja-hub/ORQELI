@@ -16,12 +16,14 @@ Note: GitHub Pages or static CDN hosts can only serve static assets and cannot h
 
 Every school-specific table carries an explicit `schoolId` column and foreign key referencing `School(id)`:
 
-- `School` — Tenant root (`code`, `name`, `sector`, `province`, `district`, `timezone`, `isSyntheticDemo`, `status`).
-- `SchoolMembership` — Binds `User` to `School` with a `SchoolRole` (`SCHOOL_ADMIN`, `HEAD_TEACHER`, `DEPUTY_HEAD`, `TEACHER`, `PARENT_GUARDIAN`) and `MembershipStatus`.
+- `School` — Tenant root (`code`, `registrationNumber`, `name`, `sector`, `province`, `district`, `levelSummary`, `publicDescription`, `studentPortalEnabled`, `timezone`, `isSyntheticDemo`, `status`).
+- `SchoolMembership` — Binds `User` to `School` with a `SchoolRole` (`SCHOOL_ADMIN`, `HEAD_TEACHER`, `DEPUTY_HEAD`, `TEACHER`, `PARENT_GUARDIAN`, `STUDENT`) and `MembershipStatus`. Note: `STUDENT` is intentionally excluded from `STAFF_ROLES`, `LEADERSHIP_ROLES`, and `APPROVAL_ROLES`.
 - `AcademicYear` & `AcademicTerm` — School calendar hierarchy (`TERM_1`, `TERM_2`, `TERM_3`).
 - `SchoolClass` & `Subject` — Classes (`gradeLevel`, optional `classTeacherMembershipId`) and school subjects (`code`, `maxMark`, `isCore`).
 - `ClassSubjectAllocation` — Authorises a specific `TEACHER` membership to enter marks for `(schoolClassId, subjectId)`.
-- `Learner` & `LearnerGuardianLink` — School-scoped learner records (`@@unique([schoolId, admissionNumber])`, `preferredChannel`) and explicit guardian-to-learner links.
+- `Learner`, `LearnerGuardianLink`, & `LearnerStudentLink` — School-scoped learner records (`@@unique([schoolId, admissionNumber])`) and explicit verified 1:1 student-to-learner links (`@@unique([learnerId])`, `@@unique([membershipId])`).
+- `StudentEnrolmentCode` & `StudentRegistrationRequest` — Single-use expiring/revocable SHA-256 hashed enrolment codes (`codeHash` unique, plaintext never stored) and audited staff-approval queue for students without an enrolment slip.
+- `SchoolAnnouncement` — School-scoped notices (`STUDENTS_AND_STAFF` vs `STAFF_ONLY`).
 - `TermResultPack` & `SubjectMark` — Class-term result lifecycle (`DRAFT` → `SUBMITTED` → `NEEDS_REVISION` → `APPROVED` → `PUBLISHED`) and individual learner-subject marks (`PENDING`, `PRESENT`, `ABSENT`, `EXEMPT`).
 - `AuditEvent` — Immutable event log recording `schoolId`, `actorUserId`, `actorMembershipId`, `action`, `entityType`, `entityId`, `beforeState`, `afterState`, and `metadata`.
 - `Session` (`"session"`) — PostgreSQL backing table for `connect-pg-simple`.
@@ -42,7 +44,11 @@ To avoid overstating security posture during early-stage development, ORQELI Edu
 - **Argon2id password hashing** (`argon2id`, constant-time dummy verification when email is unknown).
 - **PostgreSQL-persisted `HttpOnly` sessions** (`express-session` + `connect-pg-simple`), session ID rotation (`req.session.regenerate()`) on login, `MemoryStore` blocked in `production`, and `Secure` cookies enforced in `production`.
 - **HMAC-SHA256 CSRF defense-in-depth**: `Origin`/`Referer` allowlisting, `Sec-Fetch-Site: cross-site` rejection, form content-type rejection, and constant-time verification of session-bound `X-CSRF-Token` headers on all state-changing HTTP methods.
-- **No open public self-registration**: Accounts and school memberships cannot be self-created via public endpoints.
+- **Controlled student registration & verification (no open staff self-registration)**:
+  - Staff accounts and roles (`SCHOOL_ADMIN`, `HEAD_TEACHER`, `DEPUTY_HEAD`, `TEACHER`) cannot be self-registered publicly.
+  - Student self-registration (`POST /api/student/register`) is restricted to non-suspended schools with `studentPortalEnabled = true`, is IP rate-limited, never links accounts by name/class/DOB alone, and requires either a valid single-use SHA-256 enrolment code matching `(schoolId, admissionNumber)` or an `INACTIVE` pending request explicitly approved by school leadership.
+  - Public endpoints return uniform errors without enumerating whether a learner admission number exists, and student report-card routes enforce strict 1:1 `LearnerStudentLink` ownership (`403 STUDENT_LEARNER_ACCESS_DENIED`) to prevent IDOR across learners or schools.
+- **IP sliding-window rate limiting** on public school discovery, student registration, and login routes.
 - **API-enforced workflow permissions**:
   - Only the allocated subject `TEACHER` can enter/modify marks for a class-subject, and only while the pack is `DRAFT` or `NEEDS_REVISION`.
   - Incomplete packs (`missingCount > 0`) are rejected at submission, approval, and publication (`409 INCOMPLETE_MARKS`).

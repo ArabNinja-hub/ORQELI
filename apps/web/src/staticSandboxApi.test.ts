@@ -120,3 +120,71 @@ test('static sandbox enforces missing-mark detection, approval gate, guardian ga
   const tashaAfter = afterGuardian.learners.find((l) => l.learner.id === 'lrn_syn_901');
   assert.equal(tashaAfter?.publishedReports.length, 1);
 });
+
+test('static sandbox supports public school discovery, student verification, and student IDOR protection', async () => {
+  resetStaticSandboxState();
+
+  const dirRes = await handleStaticSandboxRequest('/api/public/schools?q=Lukanga');
+  assert.equal(dirRes.status, 200);
+  const dir = (await dirRes.json()) as { schools: Array<{ code: string }> };
+  assert.equal(dir.schools.length, 1);
+  assert.equal(dir.schools[0]?.code, 'SYN-ZM-LUS-01');
+
+  const regRes = await handleStaticSandboxRequest('/api/student/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      schoolId: 'sch_syn_lus_01',
+      fullName: 'Chisomo Banda',
+      admissionNumber: 'SYN-2026-0802',
+      email: 'chisomo.static@synthetic.orqeli.invalid',
+      password: STATIC_SANDBOX_CREDENTIAL,
+      verificationMode: 'ENROLMENT_CODE',
+      enrolmentCode: 'ORQ-8B02-2026'
+    })
+  });
+  assert.equal(regRes.status, 201);
+
+  const reuseRes = await handleStaticSandboxRequest('/api/student/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      schoolId: 'sch_syn_lus_01',
+      fullName: 'Duplicate Attempt',
+      admissionNumber: 'SYN-2026-0802',
+      email: 'dup.static@synthetic.orqeli.invalid',
+      password: STATIC_SANDBOX_CREDENTIAL,
+      verificationMode: 'ENROLMENT_CODE',
+      enrolmentCode: 'ORQ-8B02-2026'
+    })
+  });
+  assert.equal(reuseRes.status, 400);
+
+  const portalRes = await handleStaticSandboxRequest('/api/student/portal');
+  assert.equal(portalRes.status, 200);
+  const portal = (await portalRes.json()) as {
+    accounts: Array<{
+      verificationState: string;
+      learner: { id: string } | null;
+      termResults: Array<{ packId: string; publicationState: string; reportCard: unknown }>;
+    }>;
+  };
+  assert.equal(portal.accounts.length, 1);
+  assert.equal(portal.accounts[0]?.verificationState, 'VERIFIED');
+  assert.equal(portal.accounts[0]?.learner?.id, 'lrn_syn_802');
+  const pubTerm = portal.accounts[0]?.termResults.find(
+    (t) => t.packId === 'pck_syn_g8b_t2'
+  );
+  const unpubTerm = portal.accounts[0]?.termResults.find(
+    (t) => t.packId === 'pck_syn_g8b_t3'
+  );
+  assert.equal(pubTerm?.publicationState, 'PUBLISHED');
+  assert.notEqual(pubTerm?.reportCard, null);
+  assert.equal(unpubTerm?.publicationState, 'UNPUBLISHED');
+  assert.equal(unpubTerm?.reportCard, null);
+
+  // Student cannot open another learner's report card (IDOR check)
+  const idorRes = await handleStaticSandboxRequest(
+    '/api/student/schools/sch_syn_lus_01/learners/lrn_syn_801/report-cards/pck_syn_g8b_t2'
+  );
+  assert.equal(idorRes.status, 403);
+});
+

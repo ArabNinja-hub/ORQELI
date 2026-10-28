@@ -95,11 +95,11 @@ In many Zambian schools, the physical end-of-term paper report card remains the 
 
 ---
 
-## 8. Parent Access Without Requiring Smartphone Ownership
+## 8. Verified Student Academic Portal & Low-Bandwidth Access
 
-ORQELI Education explicitly avoids assuming that parents or guardians own smartphones or have continuous mobile data:
-
-1. **Paper-First Baseline (Implemented)**: Every learner defaults to `preferredChannel = PRINT_REPORT`, and every printable A4 report card includes a physical tear-off acknowledgment slip that a parent can sign and return via the learner.
-2. **Authorised Guardian View (Implemented)**: For families who do use a shared browser or phone, `GET /api/schools/:schoolId/guardian/results` returns **strictly `PUBLISHED`** report cards for learners explicitly linked via `LearnerGuardianLink`. Unpublished packs (`DRAFT`, `SUBMITTED`, `NEEDS_REVISION`, `APPROVED`) are never exposed.
+1. **CBU OPUS-Inspired Student Academic Portal (Implemented)**:
+   - Secondary students who verify their account via a school-issued single-use enrolment code (`ENROLMENT_CODE`) or school leadership approval (`STAFF_APPROVAL`) can sign in at `/student` to inspect their verified school/class identity, **published** term results (subject marks, percentages, grade bands, and teacher remarks), term-by-term academic history, school notices, and printable A4 report cards.
+   - Unpublished result packs (`DRAFT`, `SUBMITTED`, `NEEDS_REVISION`, and `APPROVED` prior to publication) show a clear status notice only — marks and remarks are never returned until `TermResultPack.status === 'PUBLISHED'`.
+2. **Paper-First Baseline (Implemented)**: Every learner defaults to `preferredChannel = PRINT_REPORT`, and every printable A4 report card includes a physical tear-off acknowledgment slip so access never depends on continuous home internet.
 3. **Feature-Phone SMS & USSD Channels (Candidate Extension — Not Yet Implemented)**:
-   - Future phase will introduce an outbox table (`ResultNotificationDispatch`) triggered only when `TermResultPack` transitions to `PUBLISHED`, sending concise plain-text subject summaries via Zambian SMS aggregators to `Learner.guardianPhone` when `preferredChannel = SMS_SUMMARY`, alongside optional USSD lookup using school code + learner admission number + term PIN.
+   - Future phase will introduce an outbox table (`ResultNotificationDispatch`) triggered only when `TermResultPack` transitions to `PUBLISHED`, sending concise plain-text subject summaries via Zambian SMS aggregators alongside optional USSD lookup.

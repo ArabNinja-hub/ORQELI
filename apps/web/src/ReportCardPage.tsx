@@ -121,6 +121,61 @@ export function GuardianReportCardPage() {
   );
 }
 
+export function StudentReportCardPage() {
+  const { schoolId = '', learnerId = '', packId = '' } = useParams();
+  const { apiFetch } = useAuth();
+  const [reportCard, setReportCard] = useState<ReportCard | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+
+    void (async () => {
+      try {
+        const res = await apiFetch<{ reportCard: ReportCard }>(
+          `/api/student/schools/${encodeURIComponent(
+            schoolId
+          )}/learners/${encodeURIComponent(learnerId)}/report-cards/${encodeURIComponent(
+            packId
+          )}`
+        );
+        if (active) {
+          setReportCard(res.reportCard);
+        }
+      } catch (err) {
+        if (active) {
+          setError(
+            err instanceof ApiRequestError
+              ? err.message
+              : 'Could not load your published report card.'
+          );
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [apiFetch, schoolId, learnerId, packId]);
+
+  return (
+    <ReportCardDocumentView
+      loading={loading}
+      error={error}
+      reportCard={reportCard}
+      backHref="/student"
+      backLabel="Back to student portal"
+    />
+  );
+}
+
 function ReportCardDocumentView({
   loading,
   error,
@@ -270,7 +325,7 @@ function ReportCardDocumentView({
               <th scope="col" className="num-col">
                 Max
               </th>
-              <th scope="col">Status</th>
+              <th scope="col">Grade</th>
               <th scope="col">Subject Teacher &amp; Remark</th>
             </tr>
           </thead>
@@ -285,7 +340,7 @@ function ReportCardDocumentView({
                   {sub.status === 'PRESENT' && sub.score !== null ? sub.score : '—'}
                 </td>
                 <td className="num-col mono">{sub.maxMark}</td>
-                <td>{sub.status}</td>
+                <td>{sub.grade}</td>
                 <td>
                   <span className="report-remark">
                     {sub.teacherComment ?? 'No written comment recorded.'}

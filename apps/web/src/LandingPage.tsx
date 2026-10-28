@@ -114,20 +114,30 @@ export function LandingPage() {
               or home internet.
             </p>
             <div className="hero-actions">
+              <Link to="/schools" className="btn btn-primary">
+                <span>Find your school</span>
+                <ArrowRight size={16} />
+              </Link>
               <Link
-                to={status === 'authenticated' ? '/workspace' : '/login'}
-                className="btn btn-primary"
+                to={status === 'authenticated' ? '/student' : '/student/register'}
+                className="btn btn-secondary"
               >
                 <span>
                   {status === 'authenticated'
-                    ? 'Open school workspace'
-                    : 'Sign in to school workspace'}
+                    ? 'Open student portal'
+                    : 'Student registration'}
                 </span>
-                <ArrowRight size={16} />
               </Link>
-              <a href="#workflow" className="btn btn-secondary">
-                Inspect results workflow
-              </a>
+              <Link
+                to={status === 'authenticated' ? '/workspace' : '/login'}
+                className="btn btn-secondary"
+              >
+                <span>
+                  {status === 'authenticated'
+                    ? 'Staff workspace'
+                    : 'Staff & student sign in'}
+                </span>
+              </Link>
             </div>
             <p className="hero-disclaimer">
               Research is ongoing. This repository contains foundational engineering and{' '}

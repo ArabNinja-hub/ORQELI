@@ -10,7 +10,9 @@ import React, {
 import type {
   AuthenticatedUserProfile,
   HealthResponse,
-  MembershipSummary
+  MembershipSummary,
+  StudentRegistrationPayload,
+  StudentRegistrationResponse
 } from './types';
 import { transportFetch } from './runtimeEnv';
 
@@ -52,6 +54,9 @@ interface AuthContextValue {
   healthError: string | null;
   refreshHealth: () => Promise<void>;
   login: (email: string, password: string) => Promise<LoginResult>;
+  registerStudent: (
+    payload: StudentRegistrationPayload
+  ) => Promise<StudentRegistrationResponse>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<LoginResult | null>;
   apiFetch: <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -324,6 +329,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [apiFetch, setSandboxToken]
   );
 
+  const registerStudent = useCallback(
+    async (
+      payload: StudentRegistrationPayload
+    ): Promise<StudentRegistrationResponse> => {
+      const data = await apiFetch<StudentRegistrationResponse>(
+        '/api/student/register',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        }
+      );
+      if (data.sandboxSessionToken) {
+        setSandboxToken(data.sandboxSessionToken);
+      }
+      setUser(data.user);
+      setMemberships(data.memberships);
+      setCsrfToken(data.csrfToken);
+      setStatus('authenticated');
+      return data;
+    },
+    [apiFetch, setSandboxToken]
+  );
+
   const logout = useCallback(async (): Promise<void> => {
     try {
       await apiFetch<{ status: string }>('/api/auth/logout', {
@@ -349,6 +377,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       healthError,
       refreshHealth,
       login,
+      registerStudent,
       logout,
       refreshSession,
       apiFetch
@@ -362,6 +391,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       healthError,
       refreshHealth,
       login,
+      registerStudent,
       logout,
       refreshSession,
       apiFetch

@@ -20,8 +20,18 @@ import {
 import { ApiRequestError, AuthProvider, useAuth } from './auth';
 import { BrandMark } from './BrandMark';
 import { LandingPage } from './LandingPage';
+import {
+  PublicSchoolProfilePage,
+  SchoolDiscoveryPage
+} from './SchoolDiscoveryPage';
+import { StudentRegistrationPage } from './StudentRegistrationPage';
+import { StudentPortalPage } from './StudentPortalPage';
 import { WorkspacePage } from './WorkspacePage';
-import { GuardianReportCardPage, StaffReportCardPage } from './ReportCardPage';
+import {
+  GuardianReportCardPage,
+  StaffReportCardPage,
+  StudentReportCardPage
+} from './ReportCardPage';
 import { getBaseUrl, isStaticPagesSandbox, transportFetch } from './runtimeEnv';
 import type { SandboxPersonasResponse } from './types';
 import { formatSchoolRole } from './workflowRules';
@@ -50,7 +60,7 @@ function RequireAuthentication({ children }: { children: React.ReactNode }) {
 }
 
 function LoginPage() {
-  const { status, login, health } = useAuth();
+  const { status, memberships, login, health } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -61,10 +71,10 @@ function LoginPage() {
   const [sandboxData, setSandboxData] = useState<SandboxPersonasResponse | null>(null);
 
   const rawReturnTo = new URLSearchParams(location.search).get('returnTo');
-  const destination =
+  const explicitReturnTo =
     rawReturnTo && rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//')
       ? rawReturnTo
-      : '/workspace';
+      : null;
 
   useEffect(() => {
     if (!health?.sandboxMode) {
@@ -99,15 +109,24 @@ function LoginPage() {
   }
 
   if (status === 'authenticated') {
-    return <Navigate to={destination} replace />;
+    const isStudentOnly =
+      memberships.some((m) => m.role === 'STUDENT') &&
+      !memberships.some((m) => m.role !== 'STUDENT');
+    const target = explicitReturnTo ?? (isStudentOnly ? '/student' : '/workspace');
+    return <Navigate to={target} replace />;
   }
 
   const performLogin = async (targetEmail: string, targetPassword: string) => {
     setSubmitting(true);
     setErrorMessage(null);
     try {
-      await login(targetEmail, targetPassword);
-      navigate(destination, { replace: true });
+      const result = await login(targetEmail, targetPassword);
+      const isStudentOnly =
+        result.memberships.some((m) => m.role === 'STUDENT') &&
+        !result.memberships.some((m) => m.role !== 'STUDENT');
+      navigate(explicitReturnTo ?? (isStudentOnly ? '/student' : '/workspace'), {
+        replace: true
+      });
     } catch (err) {
       if (err instanceof ApiRequestError) {
         setErrorMessage(err.message);
@@ -127,11 +146,12 @@ function LoginPage() {
   return (
     <section className="auth-layout" aria-labelledby="signin-heading">
       <div className="auth-card">
-        <span className="eyebrow">SCHOOL &amp; GUARDIAN ACCESS</span>
+        <span className="eyebrow">STUDENT &amp; SCHOOL STAFF SIGN IN</span>
         <h1 id="signin-heading">Sign in to ORQELI Education</h1>
         <p className="auth-lead">
-          Accounts and school role assignments are provisioned per school. Public self-registration
-          is intentionally disabled to protect academic records.
+          Sign in with your verified school staff or student account. Need a student account?{' '}
+          <Link to="/schools">Find your school</Link> and{' '}
+          <Link to="/student/register">register with your learner admission ID</Link>.
         </p>
 
         {errorMessage ? (
@@ -143,7 +163,7 @@ function LoginPage() {
 
         <form className="auth-form" onSubmit={handleSubmit}>
           <div className="field-group">
-            <label htmlFor="login-email">Institutional or Guardian Email</label>
+            <label htmlFor="login-email">Student or School Staff Email</label>
             <input
               id="login-email"
               type="email"
@@ -178,7 +198,7 @@ function LoginPage() {
           <ShieldCheck size={16} />
           <p>
             Sessions use server-verified <code>HttpOnly</code> cookies and CSRF protection. Every
-            action is restricted to your assigned school(s) and role.
+            action is restricted to your verified school(s), role, and learner link.
           </p>
         </div>
       </div>
@@ -188,8 +208,8 @@ function LoginPage() {
           <span className="eyebrow">SYNTHETIC SANDBOX MODE (NON-PRODUCTION)</span>
           <h2 id="personas-heading">Inspect roles with synthetic accounts</h2>
           <p className="muted-line">
-            This instance is running with in-memory synthetic data. Select a role below to populate
-            credentials or sign in directly.
+            This instance is running with synthetic demonstration data. Select a student or school
+            staff persona below to sign in directly.
           </p>
           <div className="persona-list">
             {sandboxData.personas.map((persona) => (
@@ -226,8 +246,8 @@ function LoginPage() {
           <span className="eyebrow">LOCAL EVALUATION</span>
           <h2 id="local-setup-heading">Testing with synthetic accounts</h2>
           <p className="muted-line">
-            In PostgreSQL mode, you can optionally populate synthetic demonstration schools and
-            staff/guardian accounts in a non-production database:
+            In PostgreSQL mode, you can optionally populate synthetic demonstration schools,
+            student portals, and staff accounts in a non-production database:
           </p>
           <pre className="code-snippet">npm run db:seed-synthetic</pre>
           <p className="muted-line">
@@ -246,13 +266,13 @@ function NotFoundPage() {
       <div className="state-card">
         <span className="eyebrow">404 · PAGE NOT FOUND</span>
         <h1>That page does not exist in ORQELI Education</h1>
-        <p>Return to the project overview or open your school academic workspace.</p>
+        <p>Return to the project overview, search public schools, or open your portal.</p>
         <div className="inline-actions">
           <Link to="/" className="btn btn-primary">
             Project overview
           </Link>
-          <Link to="/workspace" className="btn btn-secondary">
-            School workspace
+          <Link to="/schools" className="btn btn-secondary">
+            Find school
           </Link>
         </div>
       </div>
@@ -287,8 +307,13 @@ function ShellContent() {
     }
   };
 
-  const primaryRoleLabel =
-    memberships[0] ? formatSchoolRole(memberships[0].role) : 'Authenticated';
+  const primaryRoleLabel = memberships[0]
+    ? formatSchoolRole(memberships[0].role)
+    : 'Authenticated';
+  const isStudentOnly =
+    memberships.some((m) => m.role === 'STUDENT') &&
+    !memberships.some((m) => m.role !== 'STUDENT');
+  const homePortalHref = isStudentOnly ? '/student' : '/workspace';
   const baseUrl = getBaseUrl();
   const staticPagesMode = isStaticPagesSandbox();
 
@@ -305,11 +330,16 @@ function ShellContent() {
       </a>
 
       {staticPagesMode ? (
-        <div className="static-preview-banner no-print" role="region" aria-label="Static sandbox notice">
+        <div
+          className="static-preview-banner no-print"
+          role="region"
+          aria-label="Static sandbox notice"
+        >
           <div className="static-preview-inner">
             <span>
               <strong>GitHub Pages Interactive Preview:</strong> Browser-only synthetic sandbox
-              (data stays in this tab; no backend server or real learner records are connected).
+              (data stays in this tab; real authentication, server-side RBAC, and IDOR security
+              require the backend server).
             </span>
             <button
               type="button"
@@ -324,7 +354,12 @@ function ShellContent() {
 
       <header className="site-header no-print">
         <div className="header-inner">
-          <Link to="/" className="brand-link" onClick={closeMenu} aria-label="ORQELI Education home">
+          <Link
+            to="/"
+            className="brand-link"
+            onClick={closeMenu}
+            aria-label="ORQELI Education home"
+          >
             <BrandMark />
           </Link>
 
@@ -333,15 +368,15 @@ function ShellContent() {
             aria-label="Main navigation"
             className={menuOpen ? 'site-nav open' : 'site-nav'}
           >
-            <a href={`${baseUrl}#problems`} onClick={closeMenu}>
-              Focus areas
-            </a>
-            <a href={`${baseUrl}#workflow`} onClick={closeMenu}>
-              Results workflow
-            </a>
-            <a href={`${baseUrl}#access`} onClick={closeMenu}>
-              Parent access &amp; security
-            </a>
+            <Link to="/schools" onClick={closeMenu}>
+              Find school
+            </Link>
+            <Link to="/student/register" onClick={closeMenu}>
+              Student registration
+            </Link>
+            <Link to="/student" onClick={closeMenu}>
+              Student portal
+            </Link>
             <Link to="/workspace" onClick={closeMenu}>
               School workspace
             </Link>
@@ -350,7 +385,7 @@ function ShellContent() {
           <div className="header-actions">
             {status === 'authenticated' && user ? (
               <>
-                <Link to="/workspace" className="user-badge" onClick={closeMenu}>
+                <Link to={homePortalHref} className="user-badge" onClick={closeMenu}>
                   <UserRound size={14} />
                   <span className="user-badge-name">{user.name}</span>
                   <span className="user-role-tag">{primaryRoleLabel}</span>
@@ -389,7 +424,26 @@ function ShellContent() {
       <main id="main-content" className="site-main">
         <Routes>
           <Route path="/" element={<LandingPage />} />
+          <Route path="/schools" element={<SchoolDiscoveryPage />} />
+          <Route path="/schools/:schoolCode" element={<PublicSchoolProfilePage />} />
+          <Route path="/student/register" element={<StudentRegistrationPage />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/student"
+            element={
+              <RequireAuthentication>
+                <StudentPortalPage />
+              </RequireAuthentication>
+            }
+          />
+          <Route
+            path="/student/schools/:schoolId/learners/:learnerId/report-cards/:packId"
+            element={
+              <RequireAuthentication>
+                <StudentReportCardPage />
+              </RequireAuthentication>
+            }
+          />
           <Route
             path="/workspace"
             element={
@@ -424,15 +478,16 @@ function ShellContent() {
             <BrandMark compact />
             <p>
               Early-stage education technology foundation investigating academic record-keeping,
-              examination marks verification, and inclusive report-card communication for schools in
-              Zambia.
+              examination marks verification, and verified student &amp; printed report-card access
+              for schools in Zambia.
             </p>
           </div>
           <div className="footer-links-col">
-            <strong>Foundation Scope</strong>
-            <a href={`${baseUrl}#problems`}>Problem investigation</a>
-            <a href={`${baseUrl}#workflow`}>Approval workflow</a>
-            <Link to="/workspace">Synthetic workspace</Link>
+            <strong>Portals &amp; Directory</strong>
+            <Link to="/schools">Public school directory</Link>
+            <Link to="/student/register">Student registration</Link>
+            <Link to="/student">Student portal</Link>
+            <Link to="/workspace">School staff workspace</Link>
           </div>
           <div className="footer-notice-col">
             <strong>Research &amp; Data Notice</strong>

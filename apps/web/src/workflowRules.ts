@@ -18,6 +18,8 @@ export function formatSchoolRole(role: SchoolRole): string {
       return 'Subject Teacher';
     case 'PARENT_GUARDIAN':
       return 'Parent / Guardian';
+    case 'STUDENT':
+      return 'Student';
   }
 }
 
